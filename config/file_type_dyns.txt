@@ -1,0 +1,8 @@
+html
+txt
+js
+css
+json
+rss
+xml
+events
