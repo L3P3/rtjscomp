@@ -1249,7 +1249,7 @@ process.on('unhandledRejection',function(err) {
 });
 process.on('exit',actions.restart);
 process.on('SIGINT',actions.restart);
-process.on('SIGUSR1',actions.restart);
+// process.on('SIGUSR1',actions.restart);
 process.on('SIGUSR2',actions.restart);
 
 log('rtjscomp '+version+' gestartet');
