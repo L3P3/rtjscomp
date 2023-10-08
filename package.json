@@ -1,0 +1,22 @@
+{
+    "name": "rtjscomp",
+    "author": "L3P3 <dev@l3p3.de> (https://l3p3.de)",
+	"license": "Zlib",
+    "version": "0.1.599",
+    "description": "php-like server but with javascript",
+    "keywords": [
+        "http",
+        "javascript",
+        "server"
+    ],
+    "dependencies": {
+        "ipware": "latest",
+        "is-stream-ended": "latest",
+        "parse-multipart-data": "latest",
+        "stream-cache": "latest",
+        "querystring": "latest"
+    },
+    "scripts": {
+        "start": "bun run rtjscomp.js"
+    }
+}
