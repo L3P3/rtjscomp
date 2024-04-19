@@ -44,3 +44,4 @@ node_modules/stream-cache/lib/.StreamCache.js.un~
 node_modules/stream-cache/lib/StreamCache.js
 node_modules/stream-cache/test/.test-StreamCache.js.un~
 node_modules/stream-cache/test/test-with-child-processes.js
+bun.lockb
