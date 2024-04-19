@@ -1,6 +1,6 @@
-//RTJSCOMP von L3P3, 2017-2022
+//RTJSCOMP von L3P3, 2017-2024
 "use strict";
-const version=0.599;
+const version='0.6.0';
 
 // FESTE PARAMETER //
 const path_public='public/';
@@ -33,8 +33,6 @@ var file_privates;
 var file_blocks;
 //Pfade, die auf andere Dateien zeigen
 var path_aliases;
-//Dateien, die automatisch komprimiert wurden
-var file_gzip_auto;
 //Dienste, die automatisch gestartet werden sollen
 var services;
 //Überprüfen, ob Besucher ein Bot ist
@@ -47,10 +45,8 @@ const url=require('url');
 const fs=require('fs');
 const multipart_parse=require('parse-multipart-data').parse;
 const zlib=require('zlib');
-const streamCache=require('stream-cache');
 const request_ip_get=require('ipware')().get_ip;
 const querystring_parse=require('querystring').decode;
-const stream_check_ended=require('is-stream-ended');
 
 // REGULARE //
 //Listenzeichen HTTP
@@ -59,24 +55,13 @@ const reg_comma=/,\s*/;
 // ZWISCHENSPEICHER //
 //Dateifunktionen
 const file_cache_functions={};
-//Dateiinhalte
-const file_cache_datas={};
-//Dateigrößen
-const file_cache_data_lengths={};
-//Komprimierte Daten
-const file_cache_data_gzs={};
 
-//Bereits initialisierte Dateien
-const file_inits={};
 //Datei-übergreifende Variablen
 const globals={
 	rtjs:{
 		version:version,
 		port_http:port_http,
 		port_https:port_https
-	},
-	node:{
-		require:require
 	}
 };
 //Aktionen
@@ -388,6 +373,7 @@ function spam(type,data){
 
 // ANFRAGENVERARBEITUNG //
 async function onRequest(request,response,https){
+	https = request.headers['x-forwarded-proto'] === 'https' || https;
 	spam('request',[https,request.url]);
 	try{
 		//URL interpretieren
@@ -488,7 +474,8 @@ async function onRequest(request,response,https){
 			//Dateiinhaltslänge
 			var file_data_length;
 
-			const file_compress=!(file_type in file_type_nocompress);
+			if(file_type in file_type_nocompress)
+				file_gz_enabled=false;
 
 			//Zwischengespeicherte Kompression
 			var file_data_gz;
@@ -506,27 +493,10 @@ async function onRequest(request,response,https){
 		//Sicherstellen, dass Datei-Inhalt geladen ist
 		file_load:{
 			//Bereits zwischengespeichert?
-			{
-				//Dynamische Datei?
-				if(file_dyn_enabled){
-					if(path in file_cache_functions){
-						file_function=file_cache_functions[path];
-						break file_load;
-					}
-				}
-				//Statische Datei?
-				else if(false){
-					if(path in file_cache_datas){
-						file_data=file_cache_datas[path];
-						file_data_length=file_cache_data_lengths[path];
-
-						if(path in file_cache_data_gzs)
-							file_data_gz=file_cache_data_gzs[path];
-						else
-							file_gz_enabled=false;
-
-						break file_load;
-					}
+			if(file_dyn_enabled){
+				if(path in file_cache_functions){
+					file_function=file_cache_functions[path];
+					break file_load;
 				}
 			}
 			//Noch nicht zwischengespeichert
@@ -670,56 +640,26 @@ async function onRequest(request,response,https){
 			//Falls statisch
 			else{
 				//Dateigröße ermitteln
-				//file_cache_data_lengths[path]=
 				file_data_length=file_stat.size;
 				//Ist Datei klein genug zum Zwischenspeichern?
 				if(
 					file_data_length<=cache_raw_size_max
 				){
 					//Datei laden und zwischenspeichern
-					file_data=fs.createReadStream(path_real);/*.pipe(
-						//file_cache_datas[path]=
-						file_data=
-						new streamCache()
-					);*/
-
-					//Wurde die Datei automatisch komprimiert?
-					var file_gz_auto=false;
+					file_data=fs.createReadStream(path_real);
 
 					//Datei groß genug, um noch komprimiert werden zu können?
 					if(
 						file_data_length>90
 					){
 						//Die komprimierten Daten
-						file_cache_data_gzs[path]=file_data_gz=new streamCache();
+						file_data_gz=new streamCache();
 						//Pfad zu der komprimierten Datei
 						const path_real_gz=path_real+'.gz';
 						//Liegt die Datei schon komprimiert vor?
 						if(fs.existsSync(path_real_gz)){
-							log('Lade komprimierte Datei: '+path);
 							//Komprimierte Daten laden
 							fs.createReadStream(path_real_gz).pipe(file_data_gz);
-							//Auf Veränderungen überwachen
-							file_watch(path_real_gz,function(){
-								delete file_cache_datas[path];
-								delete file_cache_data_lengths[path];
-								delete file_cache_data_gzs[path];
-							});
-						}
-						//Muss die Datei jetzt komprimiert werden?
-						else if(false&&file_compress){
-							log('Komprimiere Datei: '+path);
-							file_gz_auto=true;
-							file_gzip_auto[path]=undefined;
-							//Kompressor
-							const compressor=zlib.createGzip(gzip_options);
-							//Datei speichern
-							const file_gz_writer=fs.createWriteStream(path_real_gz);
-							file_data_gz.pipe(file_gz_writer);
-							//Komprimierte Daten zwischenspeichern
-							compressor.pipe(file_data_gz);
-							//Gelesene Daten komprimieren
-							file_data.pipe(compressor);
 						}
 						//Dateityp nicht komprimieren?
 						else
@@ -730,25 +670,6 @@ async function onRequest(request,response,https){
 					else
 						//Nicht mehr komprimieren
 						file_gz_enabled=false;
-
-					//Auf Veränderungen überwachen
-					false&&file_watch(path_real,function(){
-						delete file_cache_datas[path];
-						delete file_cache_data_lengths[path];
-						if(file_gz_enabled){
-							delete file_cache_data_gzs[path];
-							if(false&&file_gz_auto){
-								if(stream_check_ended(path_real_gz)){
-									fs.unlinkSync(path_real_gz);
-								}
-								else{
-									file_gz_writer.end(function(){
-										fs.unlinkSync(path_real_gz);
-									});
-								}
-							}
-						}
-					});
 				}
 			}
 		}
@@ -780,31 +701,6 @@ async function onRequest(request,response,https){
 
 		//Falls dynamisch
 		if(file_dyn_enabled){
-			//Sicherstellen, dass Datei initialisiert ist
-			file_init:{
-				//Bereits initialisiert?
-				if(path in file_inits)break file_init;
-
-				const path_init=path_real+'.init.js';
-				//Hat keine Initialisierung?
-				if(!fs.existsSync(path_init))break file_init;
-
-				log('Initialisiere Datei: '+path);
-				try{
-					eval(fs.readFileSync(path_init,'utf8'));
-				}
-				catch(e){
-					log('Fehler beim Initialisieren: '+e.message);
-					throw 500;
-				}
-
-				file_inits[path]=undefined;
-				//Auf Veränderungen überwachen
-				file_watch(path_init,function(){
-					delete file_inits[path];
-				});
-			}
-
 			//Eingangsdaten sammeln
 			//Parameter für Seitenprogramm
 			const file_function_input={};
@@ -931,6 +827,7 @@ async function onRequest(request,response,https){
 					Object.entries(file_function_input)
 					.filter(e=>e[0]!=='body')
 					.map(e=>e[0]==='password'?[e[0],'***']:e)
+					.map(e=>e[0]==='file'?[e[0],'...']:e)
 					.map(e=>(typeof e[1]==='object'&&!e[1].length)?[e[0],Object.keys(e[1])]:e)
 					.map(e=>(e[0]!=='user_agent'&&typeof e[1]==='string'&&e[1].length>20)?[e[0],e[1].substr(0,20)+'...']:e)
 				)
@@ -963,7 +860,7 @@ async function onRequest(request,response,https){
 			//Ausschnitt
 			//Rohe Dateien können in Teilen übertragen werden
 			//response.setHeader('Accept-Ranges','bytes');
-			response.setHeader('Cache-Control', 'public, max-age=31536000');
+			response.setHeader('Cache-Control', 'public, max-age=600');
 			//Ausschnitt für diese Anfrage aktiviert?
 			var file_range_enabled=false;
 			//Ausschnitt ermitteln
@@ -1223,12 +1120,7 @@ actions.shutdown=function(){
 	services_shutdown();
 	actions.http_stop();
 	actions.https_stop&&actions.https_stop();
-	actions.spam_save();/*
-	log('Liste an automatisch komprimierten Dateien speichern...');
-	fs.writeFileSync(
-		path_config+'file_gzip_auto.txt',
-		bol_generate_map(file_gzip_auto)
-	);*/
+	actions.spam_save();
 	log('Angehalten');
 }
 actions.restart=function(){
@@ -1249,8 +1141,9 @@ process.on('unhandledRejection',function(err) {
 });
 process.on('exit',actions.restart);
 process.on('SIGINT',actions.restart);
-// process.on('SIGUSR1',actions.restart);
+//process.on('SIGUSR1',actions.restart);
 process.on('SIGUSR2',actions.restart);
+process.on('SIGTERM',actions.restart);
 
 log('rtjscomp '+version+' gestartet');
 
@@ -1299,10 +1192,6 @@ file_keep_new(path_config+'file_privates.txt',true,function(data){
 file_keep_new(path_config+'file_blocks.txt',true,function(data){
 	log('Liste an blockierten Pfaden laden...');
 	file_blocks=map_generate_bol(data);
-});
-file_keep_new(path_config+'file_gzip_auto.txt',true,function(data){
-	log('Liste an automatisch komprimierten Dateien laden...');
-	file_gzip_auto=map_generate_bol(data);
 });
 file_keep_new(path_config+'cache_raw_size_max.txt',true,function(data){
 	log('Maximale Dateigröße zum Zwischenspeichern laden...');
