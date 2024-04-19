@@ -1,0 +1,58 @@
+	add compression of dynamic data
+	add https
+	add actions
+0.5
+	add shutdown action
+	prefer gzip over lzma
+	move public files into separate dir
+0.51
+	add list of raw files
+0.52
+	ignore empty areas (<??> or ?><?)
+0.53
+	move configuration data to separate files
+0.54
+	add path aliases
+	block accessing directories
+0.55
+	add http-header Content-Location
+0.56
+	add list of file types not to compress
+	keep raw files in ram
+	remove lzma
+	add compression of raw files
+	load already compressed files
+	just compress when at least 100 bytes of data
+0.57
+	cleanup code
+	execute and send file in parallel
+	add services
+0.58
+	add analytic logger
+	use compressed file even if file type is not intended as being compressed
+0.59
+	remove static files from cache when precompressed files got changed
+0.591
+	set gzip level to 9
+	save automatically compressed files
+0.592
+	block requests with invalid hostname
+0.593
+	add user data storage
+0.594
+	remove custom file init
+	asynchronize request handling
+	temporarily disable chaching of static files
+0.595
+	send partial files
+	load and interpret file in parallel
+	optimize source codes of sent files
+0.596
+	stop services before replacing them
+	service_require return service object
+0.597
+	stop services on exit
+0.598
+	read request body
+0.599
+	???
