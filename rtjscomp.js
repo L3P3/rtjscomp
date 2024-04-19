@@ -652,14 +652,12 @@ async function onRequest(request,response,https){
 					if(
 						file_data_length>90
 					){
-						//Die komprimierten Daten
-						file_data_gz=new streamCache();
 						//Pfad zu der komprimierten Datei
 						const path_real_gz=path_real+'.gz';
 						//Liegt die Datei schon komprimiert vor?
 						if(fs.existsSync(path_real_gz)){
 							//Komprimierte Daten laden
-							fs.createReadStream(path_real_gz).pipe(file_data_gz);
+							file_data_gz=fs.createReadStream(path_real_gz);
 						}
 						//Dateityp nicht komprimieren?
 						else
