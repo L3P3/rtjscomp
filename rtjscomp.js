@@ -1,6 +1,6 @@
 //RTJSCOMP von L3P3, 2017-2024
 "use strict";
-const version='0.6.0';
+const version='0.6.1';
 
 // FESTE PARAMETER //
 const path_public='public/';
@@ -17,8 +17,6 @@ var hostnames;
 var port_http;
 //HTTPS-Port
 var port_https;
-//Maximale Größe von statischen Dateien, um zwischengespeichert zu werden
-var cache_raw_size_max;
 //Dateitypen
 var file_type_mimes;
 //Dateitypen, die interpretiert werden sollen
@@ -641,34 +639,30 @@ async function onRequest(request,response,https){
 			else{
 				//Dateigröße ermitteln
 				file_data_length=file_stat.size;
-				//Ist Datei klein genug zum Zwischenspeichern?
-				if(
-					file_data_length<=cache_raw_size_max
-				){
-					//Datei laden und zwischenspeichern
-					file_data=fs.createReadStream(path_real);
+				//Datei laden
+				file_data=fs.createReadStream(path_real);
 
-					//Datei groß genug, um noch komprimiert werden zu können?
-					if(
-						file_data_length>90
-					){
-						//Pfad zu der komprimierten Datei
-						const path_real_gz=path_real+'.gz';
-						//Liegt die Datei schon komprimiert vor?
-						if(fs.existsSync(path_real_gz)){
-							//Komprimierte Daten laden
-							file_data_gz=fs.createReadStream(path_real_gz);
-						}
-						//Dateityp nicht komprimieren?
-						else
-							//Nicht mehr komprimieren
-							file_gz_enabled=false;
+				//Datei groß genug, um noch komprimiert werden zu können?
+				if(
+					file_gz_enabled&&
+					file_data_length>90
+				){
+					//Pfad zu der komprimierten Datei
+					const path_real_gz=path_real+'.gz';
+					//Liegt die Datei schon komprimiert vor?
+					if(fs.existsSync(path_real_gz)){
+						//Komprimierte Daten laden
+						file_data_gz=fs.createReadStream(path_real_gz);
 					}
-					//Datei zu klein?
+					//Dateityp nicht komprimieren?
 					else
 						//Nicht mehr komprimieren
 						file_gz_enabled=false;
 				}
+				//Datei zu klein?
+				else
+					//Nicht mehr komprimieren
+					file_gz_enabled=false;
 			}
 		}
 
@@ -1190,18 +1184,6 @@ file_keep_new(path_config+'file_privates.txt',true,function(data){
 file_keep_new(path_config+'file_blocks.txt',true,function(data){
 	log('Liste an blockierten Pfaden laden...');
 	file_blocks=map_generate_bol(data);
-});
-file_keep_new(path_config+'cache_raw_size_max.txt',true,function(data){
-	log('Maximale Dateigröße zum Zwischenspeichern laden...');
-	if(
-		data===null||
-		isNaN(data=Number(data))||
-		!number_check_uint(data)
-	)
-		log('Ungültige Dateigröße');
-	else{
-		cache_raw_size_max=data;
-	}
 });
 
 file_keep_new(path_config+'services.txt',true,function(data){
