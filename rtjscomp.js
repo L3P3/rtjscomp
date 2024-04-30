@@ -1,6 +1,6 @@
 //RTJSCOMP von L3P3, 2017-2024
 "use strict";
-const version='0.6.1';
+const version='0.6.2';
 
 // FESTE PARAMETER //
 const path_public='public/';
@@ -820,7 +820,7 @@ async function onRequest(request,response,https){
 					.filter(e=>e[0]!=='body')
 					.map(e=>e[0]==='password'?[e[0],'***']:e)
 					.map(e=>e[0]==='file'?[e[0],'...']:e)
-					.map(e=>(typeof e[1]==='object'&&!e[1].length)?[e[0],Object.keys(e[1])]:e)
+					.map(e=>(typeof e[1]==='object'&&!e[1].length)?[e[0],Object.keys(e[1]).slice(0, 20)]:e)
 					.map(e=>(e[0]!=='user_agent'&&typeof e[1]==='string'&&e[1].length>20)?[e[0],e[1].substr(0,20)+'...']:e)
 				)
 			]);
