@@ -1,6 +1,6 @@
 //RTJSCOMP von L3P3, 2017-2025
 "use strict";
-const version='0.7.0';
+const version='0.7.1';
 
 // FESTE PARAMETER //
 const path_public='public/';
@@ -818,7 +818,7 @@ async function onRequest(request,response,https){
 				file_function_input['https']=https;
 				file_function_input['ip']=request_ip;
 				file_function_input['method']=request.method.toLowerCase();
-				file_function_input['path']=path;
+				file_function_input['path']=request_url_parsed.pathname;
 			}
 			//Rückgabedaten
 			var file_function_output;
