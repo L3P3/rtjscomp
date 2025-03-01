@@ -1,6 +1,6 @@
-//RTJSCOMP von L3P3, 2017-2024
+//RTJSCOMP von L3P3, 2017-2025
 "use strict";
-const version='0.6.2';
+const version='0.7.0';
 
 // FESTE PARAMETER //
 const path_public='public/';
@@ -31,6 +31,7 @@ var file_privates;
 var file_blocks;
 //Pfade, die auf andere Dateien zeigen
 var path_aliases;
+var path_aliases_templates;
 //Dienste, die automatisch gestartet werden sollen
 var services;
 //Überprüfen, ob Besucher ein Bot ist
@@ -419,10 +420,35 @@ async function onRequest(request,response,https){
 		}
 		//Sicherstellen, dass Pfad nicht blockiert ist
 		if(path in file_blocks)return;
+		let file_function_input=null;
 		//Decknamen auflösen
 		if(path in path_aliases){
 			path=path_aliases[path];
 			response.setHeader('Content-Location',path);
+		}
+		//Decknamen mit * auflösen
+		else{
+			const path_split=path.split('/');
+			const templates=path_aliases_templates[path_split[0]];
+			if(templates){
+				path_split.shift();
+				template:for(const template_pair of templates){
+					const template=template_pair[0];
+					const template_length=template.length;
+					if(template_length!==path_split.length)continue;
+					const params={};
+					for(let i=0;i<template_length;++i){
+						if(template[i].charCodeAt(0)===42){
+							if(template[i].length>1)params[template[i].substr(1)]=path_split[i];
+						}
+						else if(template[i]!==path_split[i])continue template;
+					}
+					path=template_pair[1];
+					response.setHeader('Content-Location',path);
+					file_function_input=params;
+					break;
+				}
+			}
 		}
 
 		//Inhalt lesen
@@ -695,7 +721,7 @@ async function onRequest(request,response,https){
 		if(file_dyn_enabled){
 			//Eingangsdaten sammeln
 			//Parameter für Seitenprogramm
-			const file_function_input={};
+			file_function_input=file_function_input||{};
 			{
 				//Kekse auslesen
 				cookie_read:{
@@ -792,6 +818,7 @@ async function onRequest(request,response,https){
 				file_function_input['https']=https;
 				file_function_input['ip']=request_ip;
 				file_function_input['method']=request.method.toLowerCase();
+				file_function_input['path']=path;
 			}
 			//Rückgabedaten
 			var file_function_output;
@@ -1166,6 +1193,16 @@ file_keep_new(path_config+'file_type_mimes.txt',true,function(data){
 file_keep_new(path_config+'path_aliases.txt',true,function(data){
 	log('Liste an Pfadumleitungen laden...');
 	path_aliases=map_generate_equ(data);
+	path_aliases_templates={};
+	for(var key in path_aliases){
+		var star_index=key.indexOf('*');
+		if(star_index<0)continue;
+		var template=key.split('/');
+		var first=template.shift();
+		if(first in path_aliases_templates)path_aliases_templates[first].push([template,path_aliases[key]]);
+		else path_aliases_templates[first]=[[template,path_aliases[key]]];
+		delete path_aliases[key];
+	}
 });
 file_keep_new(path_config+'file_type_dyns.txt',true,function(data){
 	log('Liste an rohen Dateitypen laden...');
