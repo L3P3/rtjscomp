@@ -1122,7 +1122,9 @@ actions.restart=function(){
 }
 
 process.on('uncaughtException',function(err) {
-	log('uncaughtException: '+(err.message||err));
+	err = err.message || err;
+	if (typeof err === 'symbol') err = err.toString();
+	log('uncaughtException: '+err);
 	console.log(err);
 	actions.restart();
 });
