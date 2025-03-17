@@ -1,13 +1,11 @@
+#!/usr/bin/env node
 /**
-	RTJSCOMP von L3P3, 2017-2025
+	RTJSCOMP by L3P3, 2017-2025
 */
 
 "use strict";
 
-const rtjscomp = {
-	actions: {},
-	version: require('./package.json').version,
-};
+(async () => {
 
 const http = require('http');
 const url = require('url');
@@ -18,7 +16,7 @@ const zlib = require('zlib');
 const request_ip_get = require('ipware')().get_ip;
 const querystring_parse = require('querystring').decode;
 
-const VERSION = rtjscomp.version;
+const VERSION = require('./package.json').version;
 const PATH_PUBLIC = 'public/';
 const PATH_CONFIG = 'config/';
 const PATH_DATA = 'data/';
@@ -42,10 +40,13 @@ const file_blocks = new Set;
 const path_aliases = new Map;
 const path_aliases_templates = new Map;
 const services = new Set;
-
 /// compiled file handlers
 const file_cache_functions = new Map;
-const actions = rtjscomp.actions;
+const actions = {};
+const rtjscomp = global.rtjscomp = {
+	actions,
+	version: VERSION,
+};
 
 if (!Object.fromEntries) {
 	Object.fromEntries = entries => {
@@ -55,9 +56,10 @@ if (!Object.fromEntries) {
 	};
 }
 
-// legacy
-const globals = rtjscomp;
-function data_load(name) {
+// legacy, will be removed soon!
+global.globals = rtjscomp;
+global.actions = rtjscomp.actions;
+global.data_load = name => {
 	log('[deprecated!] load: ' + name);
 	try {
 		return fs.readFileSync(PATH_DATA + name, 'utf8');
@@ -66,45 +68,47 @@ function data_load(name) {
 		return null;
 	}
 }
-function data_save(name, data) {
-	log('[deprecated!] save: ' + name);
-	fs.writeFileSync(PATH_DATA + name, data, 'utf8');
-}
+global.data_save = (name, data) => (
+	log('[deprecated!] save: ' + name),
+	fs.writeFileSync(PATH_DATA + name, data, 'utf8')
+)
+global.number_check_int = number => (
+	Math.floor(number) === number
+)
+global.number_check_uint = number => (
+	number >= 0 && number_check_int(number)
+)
 
 rtjscomp.data_load = async name => {
 	log('load: ' + name);
-	try {
-		return JSON.parse(
-			await fsp.readFile(PATH_DATA + name + '.json', 'utf8')
-		);
-	}
-	catch (err) {
-		return null;
-	}
+	const data = await fsp.readFile(PATH_DATA + name, 'utf8').catch(() => null);
+	return name.endsWith('.json') ? JSON.parse(data || null) : data;
 }
 rtjscomp.data_load_watch = (name, callback) => (
-	file_keep_new(PATH_DATA + name + '.json', data => (
+	file_keep_new(PATH_DATA + name, data => (
 		log('load: ' + name),
 		callback(
-			JSON.parse(data || null)
+			name.endsWith('.json')
+			?	JSON.parse(data || null)
+			:	data
 		)
 	))
 )
 rtjscomp.data_save = (name, data) => (
 	log('save: ' + name),
 	fsp.writeFile(
-		PATH_DATA + name + '.json',
-		JSON.stringify(data),
+		PATH_DATA + name,
+		name.endsWith('.json') ? JSON.stringify(data) : data,
 		'utf8'
 	)
 )
 
 const services_active = new Map;
-async function services_list_react() {
+const services_list_react = async () => {
 	await Promise.all(
 		Array.from(services_active.entries())
 			.filter(([path, _]) => !services.has(path))
-			.map(([_, service_object]) => service_stop(service_object))
+			.map(([_, service_object]) => service_stop(service_object, true))
 	);
 	await Promise.all(
 		Array.from(services)
@@ -112,7 +116,7 @@ async function services_list_react() {
 			.map(path => service_start(path))
 	);
 }
-async function service_start(path) {
+const service_start = async path => {
 	const service_object = {
 		path,
 		start: null,
@@ -120,27 +124,29 @@ async function service_start(path) {
 		stop: null,
 		stopped: false,
 	};
-	services_active.set(path, service_object);
 
 	await file_keep_new(PATH_PUBLIC + path + '.service.js', async file_content => {
 		if (file_content === null) {
 			log('error, service file not found: ' + path);
-			await service_stop(service_object);
+			await service_stop(service_object, true);
 			return;
 		}
 		await service_stop_handler(service_object);
 		await service_start_inner(path, service_object, file_content);
 	});
 }
-async function service_start_inner(path, service_object, file_content) {
+const service_start_inner = async (path, service_object, file_content) => {
 	try {
 		const fun = new Function(
-			`const log=a=>{log_o(${JSON.stringify(path)}+': '+a)};{const log_o=undefined;'${file_content}}`
+			`const log=a=>rtjscomp.log(${
+				JSON.stringify(path + ': ')
+			}+a);${file_content}`
 		);
 		fun.call(service_object);
 	}
 	catch (err) {
 		log(`error in service ${path}: ${err.message}`);
+		await service_stop(service_object, false);
 		return;
 	}
 
@@ -149,29 +155,31 @@ async function service_start_inner(path, service_object, file_content) {
 			await service_object.start();
 			service_object.start = null;
 			service_object.started = true;
-			log('service started: ' + path);
 		}
 		catch (err) {
 			services_active.delete(path);
 			log(`error while starting ${path}: ${err.message}`);
+			return;
 		}
 	}
+	services_active.set(path, service_object);
+	log('service started: ' + path);
 }
-async function services_shutdown() {
-	log('shutdown services...');
-	await Promise.all(
+const services_shutdown = () => (
+	log('shutdown services...'),
+	Promise.all(
 		Array.from(services_active.values())
-			.map(service_stop)
-	);
-}
-async function service_stop(service_object) {
+			.map(service_object => service_stop(service_object, true))
+	)
+)
+const service_stop = async (service_object, forget) => {
 	service_object.stopped = true;
-	fs.unwatchFile(PATH_PUBLIC + service_object.path + '.service.js');
+	if (forget) fs.unwatchFile(PATH_PUBLIC + service_object.path + '.service.js');
 	await service_stop_handler(service_object);
 	services_active.delete(service_object.path);
 	log('service stopped: ' + service_object.path);
 }
-async function service_stop_handler(service_object) {
+const service_stop_handler = async service_object => {
 	if (service_object.stop) {
 		try {
 			await service_object.stop();
@@ -182,19 +190,16 @@ async function service_stop_handler(service_object) {
 		}
 	}
 }
-function service_check(path) {
-	return services_active.has(path);
+global.service_require = path => {
+	const service = services_active.get(path);
+	if (service) return service;
+	throw new Error('service required: ' + path);
 }
-function service_require(path) {
-	if (service_check(path)) return services_active.get(path);
-	log('error, service required: ' + path);
-	throw 503;
-}
-function service_require_try(path) {
-	return services_active.get(path) || null;
-}
+global.service_require_try = path => (
+	services_active.get(path) || null
+)
 
-function map_generate_bol(set, data) {
+const map_generate_bol = (set, data) => {
 	set.clear();
 	for (const key of data.split('\n'))
 	if (
@@ -204,7 +209,7 @@ function map_generate_bol(set, data) {
 		set.add(key);
 	}
 }
-function map_generate_equ(map, data) {
+const map_generate_equ = (map, data) => {
 	map.clear();
 	for (const entry of data.split('\n'))
 	if (
@@ -216,41 +221,28 @@ function map_generate_equ(map, data) {
 	}
 }
 
-function number_check_int(number) {
-	return Math.floor(number) === number;
-}
-function number_check_uint(number) {
-	return (number >= 0) && number_check_int(number);
-}
-
-function file_compare(curr, prev, path) {
-	if (curr.mtime > prev.mtime) {
-		log('file changed: ' + path);
-		return true;
-	}
-	return false;
-}
-
-function file_watch(path, callback) {
+const file_compare = (curr, prev, path) => (
+	curr.mtime > prev.mtime && (
+		log('file changed: ' + path),
+		true
+	)
+)
+const file_watch = (path, callback) => (
 	fs.watchFile(path, (curr, prev) => {
 		if (file_compare(curr, prev, path)) {
 			fs.unwatchFile(path);
 			callback();
 		}
-	});
-}
-
-async function file_keep_new(path, callback) {
+	})
+)
+const file_keep_new = async (path, callback) => {
 	try {
 		await callback(await fsp.readFile(path, 'utf8'));
 		fs.watchFile(path, async (curr, prev) => {
 			if (file_compare(curr, prev, path)) {
-				try {
-					await callback(await fsp.readFile(path, 'utf8'));
-				}
-				catch (err) {
-					callback(null);
-				}
+				await callback(
+					await fsp.readFile(path, 'utf8').catch(() => null)
+				);
 			}
 		});
 	}
@@ -260,23 +252,22 @@ async function file_keep_new(path, callback) {
 }
 
 let log_history = [];
-
 actions.log_clear = () => {
 	log_history = [];
 }
+const log = rtjscomp.log = msg => (
+	console.log(msg),
+	log_history.push(msg),
+	spam('log', [msg])
+)
 
-function log(msg) {
-	console.log(msg);
-	log_history.push(msg);
-	spam('log', [msg]);
-}
-const log_o = log;
-
+const spam_enabled = fs.existsSync('spam.csv');
 let spam_history = '';
+actions.spam_save = async () => {
+	if (!spam_enabled) return;
 
-actions.spam_save = () => {
 	try {
-		fs.appendFileSync('spam.csv', spam_history, 'utf8');
+		fsp.appendFile('spam.csv', spam_history, 'utf8');
 		spam_history = '';
 		log('spam.csv saved');
 	}
@@ -284,8 +275,9 @@ actions.spam_save = () => {
 		log('error saving spam.csv: ' + err.message);
 	}
 }
+const spam = (type, data) => {
+	if (!spam_enabled) return;
 
-function spam(type, data) {
 	spam_history += (
 		Date.now() +
 		',' +
@@ -300,12 +292,14 @@ function spam(type, data) {
 	}
 }
 
-async function request_handle(request, response, https) {
+const request_handle = async (request, response, https) => {
 	const request_method = request.method;
 	const request_headers = request.headers;
 	const request_ip = request_ip_get(request).clientIp;
 
-	https = https || request_headers['x-forwarded-proto'] === 'https';
+	if ('x-forwarded-proto' in request_headers) {
+		https = request_headers['x-forwarded-proto'] === 'https';
+	}
 
 	spam('request', [https, request.url, request_ip]);
 
@@ -364,7 +358,6 @@ async function request_handle(request, response, https) {
 			}
 		}
 
-		const path_real = PATH_PUBLIC + path;
 		const file_type_index = path.lastIndexOf('.');
 		// no type ending -> dir?
 		if (file_type_index <= path.lastIndexOf('/')) throw 404;
@@ -406,6 +399,7 @@ async function request_handle(request, response, https) {
 
 		let file_function = null;
 		let file_stat = null;
+		const path_real = PATH_PUBLIC + path;
 
 		if (
 			file_dyn_enabled &&
@@ -436,7 +430,9 @@ async function request_handle(request, response, https) {
 					}
 					const file_content_length = file_content.length;
 
-					let code = `async (input,output,request,response)=>{const log=a=>log_o(${JSON.stringify(path)}+': '+a);`;
+					let code = `async (input,output,request,response)=>{const log=a=>rtjscomp.log(${
+						JSON.stringify(path + ': ')
+					}+a);`;
 
 					let section_dynamic = false;
 					let index_start = 0;
@@ -653,11 +649,18 @@ async function request_handle(request, response, https) {
 				file_function_output.end();
 			}
 			catch (err) {
+				if (err instanceof Error) {
+					log(`error in file ${path}: ${err.message}`);
+
+					if (err.message.startsWith('service required: ')) {
+						err = 503;
+					}
+				}
 				if (typeof err === 'number') {
 					response.removeHeader('Content-Encoding');
 					throw err;
 				}
-				log(`error in file ${path}: ${err.message}`);
+
 				file_function_output.end((
 					file_type === 'html'
 					?	'<hr>'
@@ -712,144 +715,20 @@ async function request_handle(request, response, https) {
 	}
 }
 
-log(`rtjscomp v${VERSION}`);
-
-let https_disabled = true;
-{
-	let connections_count = 0;
-	const server_http = http.createServer(
-		(request, response) => request_handle(request, response, false)
-	);
-	let http_aktiv = false;
-	let http_aktiv_soll = false;
-	const http_connections = new Map;
-
-	server_http.on('connection', connection => {
-		const id = ++connections_count;
-		http_connections.set(id, connection);
-		connection.on('close', () => {
-			http_connections.delete(id);
-		});
-	});
-
-	actions.http_start = () => {
-		if (http_aktiv) return;
-		try {
-			server_http.listen(port_http);
-			http_aktiv = http_aktiv_soll = true;
-			log('http started at port ' + port_http);
-		}
-		catch (err) {
-			log('error while starting http: ' + err.message);
-		}
-	}
-	actions.http_restart = function () {
-		if (!http_aktiv) actions.http_start();
-		else if (http_aktiv_soll) {
-			http_aktiv_soll = false;
-			log('http is restarting...');
-			server_http.close(() => {
-				http_aktiv = false;
-				log('http stopped');
-				actions.http_start();
-			});
-		}
-	}
-	actions.http_stop = function () {
-		if (!http_aktiv_soll || !http_aktiv) return;
-		http_aktiv_soll = false;
-		log('http is stopping...');
-		server_http.close(function () {
-			http_aktiv = false;
-			log('http stopped');
-		});
-	}
-	actions.http_kill = () => {
-		if (http_aktiv_soll || !http_aktiv) return;
-		log('killing http...');
-		for (const connection of http_connections.values()) connection.destroy();
-		http_connections.clear();
-	};
-
-	try {
-		const https_key = fs.readFileSync(PATH_CONFIG + 'ssl/domain.key');
-		const https_cert = fs.readFileSync(PATH_CONFIG + 'ssl/chained.pem');
-		const server_https = require('https').createServer(
-			{key: https_key, cert: https_cert},
-			(request, response) => request_handle(request, response, true)
-		);
-
-		https_disabled = false;
-
-		let https_aktiv = false;
-		let https_aktiv_soll = false;
-		const https_connections = new Map;
-
-		server_https.on('connection', connection => {
-			const id = ++connections_count;
-			https_connections.set(id, connection);
-			connection.on('close', () => {
-				https_connections.delete(id);
-			});
-		});
-
-		actions.https_start = () => {
-			if (https_aktiv) return;
-			try {
-				server_https.listen(port_https);
-				https_aktiv = https_aktiv_soll = true;
-				log('https started at port ' + port_https);
-			}
-			catch (err) {
-				log('error while starting https: ' + err.message);
-			}
-		}
-		actions.https_restart = () => {
-			if (!https_aktiv) actions.https_start();
-			else if (https_aktiv_soll) {
-				https_aktiv_soll = false;
-				log('https is restarting...');
-				server_https.close(function () {
-					https_aktiv = false;
-					log('https stopped');
-					actions.https_start();
-				});
-			}
-		}
-		actions.https_stop = () => {
-			if (!https_aktiv_soll || !https_aktiv) return;
-			https_aktiv_soll = false;
-			log('https is stopping...');
-			server_https.close(() => {
-				https_aktiv = false;
-				log('https stopped');
-			});
-		}
-		actions.https_kill = () => {
-			if (https_aktiv_soll || !https_aktiv) return;
-			log('killing https...');
-			for (const connection of https_connections.values()) connection.destroy();
-			https_connections.clear();
-		}
-	}
-	catch (err) {
-		log('https is disabled');
-	}
-}
-
 let exiting = false;
-
-actions.shutdown = async () => {
-	actions.spam_save();
-	actions.http_stop();
-	actions.https_stop && actions.https_stop();
-	await services_shutdown();
+actions.halt = async () => {
+	await Promise.all([
+		actions.http_stop(),
+		actions.https_stop && actions.https_stop(),
+		services_shutdown(),
+	].filter(Boolean));
+	await actions.spam_save();
 	log('stopped everything');
 }
-actions.restart = async status => {
+actions.exit = async status => {
 	if (exiting) return;
 	if (typeof status !== 'number') status = 0;
-	await actions.shutdown();
+	await actions.halt();
 	log('exiting...');
 	exiting = true;
 	process.exit(status);
@@ -860,83 +739,171 @@ process.on('uncaughtException', err => {
 	if (typeof err === 'symbol') err = err.toString();
 	log('error uncaughtException: ' + err);
 	console.log(err);
-	actions.restart(1);
+	actions.exit(1);
 });
 process.on('unhandledRejection', err => {
 	log('error unhandledRejection: ' + (err.message || err));
 	console.log(err);
-	actions.restart(1);
+	actions.exit(1);
 });
-process.on('exit', actions.restart);
-process.on('SIGINT', actions.restart);
-//process.on('SIGUSR1', actions.restart);
-process.on('SIGUSR2', actions.restart);
-process.on('SIGTERM', actions.restart);
+process.on('exit', actions.exit);
+process.on('SIGINT', actions.exit);
+//process.on('SIGUSR1', actions.exit);
+process.on('SIGUSR2', actions.exit);
+process.on('SIGTERM', actions.exit);
 
-file_keep_new(PATH_CONFIG + 'init.js', data => {
-	if (!data) return;
-	log('[deprecated] run global init script');
+log(`rtjscomp v${VERSION} in ${typeof Bun === 'undefined' ? 'node' : 'bun'} on ${process.platform}`);
+
+// initial
+await Promise.all([
+	fsp.stat(PATH_CONFIG).catch(_ => null),
+	fsp.stat(PATH_DATA).catch(_ => null),
+	fsp.stat(PATH_PUBLIC).catch(_ => null),
+]).then(([stat_config, stat_data, stat_public]) => {
+	if (!stat_config) {
+		log('creating config template directory');
+		fs.mkdirSync(PATH_CONFIG);
+		fs.mkdirSync(PATH_CONFIG + 'ssl');
+		for (const file of 'file_type_dyns,file_type_mimes,file_type_nocompress,path_aliases,port_http,port_https,services'.split(',')) {
+			fs.copyFileSync(
+				__dirname + '/' + PATH_CONFIG + file + '.txt',
+				PATH_CONFIG + file + '.txt'
+			);
+		}
+	}
+	if (!stat_data) {
+		fs.mkdirSync(PATH_DATA);
+	}
+	if (!stat_public) {
+		fs.cpSync(
+			__dirname + '/' + PATH_PUBLIC,
+			PATH_PUBLIC,
+			{recursive: true}
+		);
+	}
+});
+
+await Promise.all([
+	file_keep_new(PATH_CONFIG + 'init.js', data => {
+		if (!data) return;
+		log('[deprecated] run global init script');
+		try {
+			eval(data);
+		}
+		catch (err) {
+			log('error while initialising: ' + err.message);
+		}
+	}),
+	file_keep_new(PATH_CONFIG + 'services.txt', async data => {
+		log('load service list');
+		map_generate_bol(services, data);
+		await services_list_react();
+	}),
+	file_keep_new(PATH_CONFIG + 'file_type_mimes.txt', data => {
+		log('load file type map');
+		map_generate_equ(file_type_mimes, data);
+		if (!file_type_mimes.has('txt')) {
+			file_type_mimes.set('txt', 'text/plain; charset=utf-8');
+		}
+	}),
+	file_keep_new(PATH_CONFIG + 'path_aliases.txt', data => {
+		log('load path aliases map');
+		map_generate_equ(path_aliases, data);
+		path_aliases_templates.clear();
+		for (const [key, value] of path_aliases.entries()) {
+			const star_index = key.indexOf('*');
+			if (star_index < 0) continue;
+			path_aliases.delete(key);
+			const template = key.split('/');
+			const first = template.shift();
+			if (path_aliases_templates.has(first)) {
+				path_aliases_templates.get(first).push([template, value]);
+			}
+			else {
+				path_aliases_templates.set(first, [
+					[template, value],
+				]);
+			}
+		}
+	}),
+	file_keep_new(PATH_CONFIG + 'file_type_dyns.txt', data => {
+		log('load dynamic file type list');
+		map_generate_bol(file_type_dyns, data);
+	}),
+	file_keep_new(PATH_CONFIG + 'file_type_nocompress.txt', data => {
+		log('load non-compressable file list');
+		map_generate_bol(file_type_nocompress, data);
+	}),
+	file_keep_new(PATH_CONFIG + 'file_raws.txt', data => {
+		if (!data) return;
+		log('load static file list');
+		map_generate_bol(file_raws, data);
+	}),
+	file_keep_new(PATH_CONFIG + 'file_privates.txt', data => {
+		if (!data) return;
+		log('load private file list');
+		map_generate_bol(file_privates, data);
+	}),
+	file_keep_new(PATH_CONFIG + 'file_blocks.txt', data => {
+		if (!data) return;
+		log('load blocked file list');
+		map_generate_bol(file_blocks, data);
+	}),
+]);
+
+let connections_count = 0;
+const server_http = http.createServer(
+	(request, response) => request_handle(request, response, false)
+);
+let http_status = false;
+let http_status_target = false;
+const http_connections = new Map;
+
+server_http.on('connection', connection => {
+	const id = ++connections_count;
+	http_connections.set(id, connection);
+	connection.on('close', () => {
+		http_connections.delete(id);
+	});
+});
+
+actions.http_start = () => {
+	if (http_status) return;
 	try {
-		eval(data);
+		server_http.listen(port_http);
+		http_status = http_status_target = true;
+		log('http started at port ' + port_http);
 	}
 	catch (err) {
-		log('error while initialising: ' + err.message);
+		log('error while starting http: ' + err.message);
 	}
-});
-
-file_keep_new(PATH_CONFIG + 'file_type_mimes.txt', data => {
-	log('load file type map');
-	map_generate_equ(file_type_mimes, data);
-	if (!file_type_mimes.has('txt')) {
-		file_type_mimes.set('txt', 'text/plain; charset=utf-8');
+}
+actions.http_restart = () => {
+	if (!http_status) actions.http_start();
+	else if (http_status_target) {
+		http_status_target = false;
+		log('http is restarting...');
+		server_http.close(() => {
+			http_status = false;
+			log('http stopped');
+			actions.http_start();
+		});
 	}
-});
-file_keep_new(PATH_CONFIG + 'path_aliases.txt', data => {
-	log('load path aliases map');
-	map_generate_equ(path_aliases, data);
-	path_aliases_templates.clear();
-	for (const [key, value] of path_aliases.entries()) {
-		const star_index = key.indexOf('*');
-		if (star_index < 0) continue;
-		path_aliases.delete(key);
-		const template = key.split('/');
-		const first = template.shift();
-		if (path_aliases_templates.has(first)) {
-			path_aliases_templates.get(first).push([template, value]);
-		}
-		else {
-			path_aliases_templates.set(first, [
-				[template, value],
-			]);
-		}
-	}
-});
-file_keep_new(PATH_CONFIG + 'file_type_dyns.txt', data => {
-	log('load dynamic file type list');
-	map_generate_bol(file_type_dyns, data);
-});
-file_keep_new(PATH_CONFIG + 'file_type_nocompress.txt', data => {
-	log('load non-compressable file list');
-	map_generate_bol(file_type_nocompress, data);
-});
-file_keep_new(PATH_CONFIG + 'file_raws.txt', data => {
-	log('load static file list');
-	map_generate_bol(file_raws, data);
-});
-file_keep_new(PATH_CONFIG + 'file_privates.txt', data => {
-	log('load private file list');
-	map_generate_bol(file_privates, data);
-});
-file_keep_new(PATH_CONFIG + 'file_blocks.txt', data => {
-	log('load blocked file list');
-	map_generate_bol(file_blocks, data);
-});
-
-file_keep_new(PATH_CONFIG + 'services.txt', async data => {
-	log('load service list');
-	map_generate_bol(services, data);
-	await services_list_react();
-});
+}
+actions.http_stop = async () => {
+	if (!http_status_target || !http_status) return;
+	http_status_target = false;
+	log('http is stopping...');
+	await new Promise(resolve => server_http.close(resolve));
+	http_status = false;
+	log('http stopped');
+}
+actions.http_kill = () => {
+	if (http_status_target || !http_status) return;
+	log('killing http...');
+	for (const connection of http_connections.values()) connection.destroy();
+	http_connections.clear();
+}
 
 file_keep_new(PATH_CONFIG + 'port_http.txt', data => {
 	log('load http port number');
@@ -952,17 +919,82 @@ file_keep_new(PATH_CONFIG + 'port_http.txt', data => {
 		actions.http_restart();
 	}
 });
-if (!https_disabled) file_keep_new(PATH_CONFIG + 'port_https.txt', data => {
-	log('load https port number');
-	if (
-		!data ||
-		isNaN(data = Number(data)) ||
-		!number_check_uint(data)
-	) {
-		log('error: invalid https port number');
+
+try {
+	const https_key = fs.readFileSync(PATH_CONFIG + 'ssl/domain.key');
+	const https_cert = fs.readFileSync(PATH_CONFIG + 'ssl/chained.pem');
+	const server_https = require('https').createServer(
+		{key: https_key, cert: https_cert},
+		(request, response) => request_handle(request, response, true)
+	);
+
+	let https_status = false;
+	let https_status_target = false;
+	const https_connections = new Map;
+
+	server_https.on('connection', connection => {
+		const id = ++connections_count;
+		https_connections.set(id, connection);
+		connection.on('close', () => {
+			https_connections.delete(id);
+		});
+	});
+
+	actions.https_start = () => {
+		if (https_status) return;
+		try {
+			server_https.listen(port_https);
+			https_status = https_status_target = true;
+			log('https started at port ' + port_https);
+		}
+		catch (err) {
+			log('error while starting https: ' + err.message);
+		}
 	}
-	else if (data !== port_https) {
-		port_https = data;
-		actions.https_restart();
+	actions.https_restart = () => {
+		if (!https_status) actions.https_start();
+		else if (https_status_target) {
+			https_status_target = false;
+			log('https is restarting...');
+			server_https.close(function () {
+				https_status = false;
+				log('https stopped');
+				actions.https_start();
+			});
+		}
 	}
-});
+	actions.https_stop = async () => {
+		if (!https_status_target || !https_status) return;
+		https_status_target = false;
+		log('https is stopping...');
+		await new Promise(resolve => server_https.close(resolve));
+		https_status = false;
+		log('https stopped');
+	}
+	actions.https_kill = () => {
+		if (https_status_target || !https_status) return;
+		log('killing https...');
+		for (const connection of https_connections.values()) connection.destroy();
+		https_connections.clear();
+	}
+
+	file_keep_new(PATH_CONFIG + 'port_https.txt', data => {
+		log('load https port number');
+		if (
+			!data ||
+			isNaN(data = Number(data)) ||
+			!number_check_uint(data)
+		) {
+			log('error: invalid https port number');
+		}
+		else if (data !== port_https) {
+			port_https = data;
+			actions.https_restart();
+		}
+	});
+}
+catch (err) {
+	log('https is disabled');
+}
+
+})();
