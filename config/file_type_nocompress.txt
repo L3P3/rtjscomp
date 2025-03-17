@@ -1,5 +1,8 @@
+# these file types should not be sent compressed
+
 png
 jpg
+pdf
 zip
 gz
 xz

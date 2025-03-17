@@ -4,12 +4,30 @@ easy to use http server that allows for using javascript just as php was used ba
 
 ## Usage
 
+go into the directory where you want to have your project and run
+
 ```console
-$ bun i
-$ bun run rtjscomp.js
+$ bunx rtjscomp
+```
+
+or
+
+```console
+$ npx rtjscomp
 ```
 
 and now localhost:8080 offers a greeting!
+
+you can also clone this repository and run
+
+```console
+$ npm install
+$ npm start
+```
+
+## Configuration
+
+when no config dir was there, it will be created with some defaults
 
 ## api
 

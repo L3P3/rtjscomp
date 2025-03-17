@@ -2,7 +2,7 @@
 	"name": "rtjscomp",
 	"author": "L3P3 <dev@l3p3.de> (https://l3p3.de)",
 	"license": "Zlib",
-	"version": "0.7.2",
+	"version": "0.8.0",
 	"description": "php-like server but with javascript",
 	"keywords": [
 		"http",
@@ -15,6 +15,9 @@
 		"querystring": "latest"
 	},
 	"scripts": {
-		"start": "bun run rtjscomp.js"
+		"start": "./rtjscomp.js"
+	},
+	"bin": {
+		"rtjscomp": "./rtjscomp.js"
 	}
 }
