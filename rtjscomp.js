@@ -15,6 +15,7 @@ const multipart_parse = require('parse-multipart-data').parse;
 const zlib = require('zlib');
 const request_ip_get = require('ipware')().get_ip;
 const querystring_parse = require('querystring').decode;
+const resolve_options = {paths: [require('path').resolve()]};
 
 const VERSION = require('./package.json').version;
 const PATH_PUBLIC = 'public/';
@@ -103,6 +104,20 @@ rtjscomp.data_save = (name, data) => (
 	)
 )
 
+const custom_require_cache = new Map;
+const custom_require = path => {
+	let result = custom_require_cache.get(path);
+	if (result != null) return result;
+
+	custom_require_cache.set(
+		path,
+		result = require(
+			require.resolve(path, resolve_options)
+		)
+	);
+	return result;
+}
+
 const services_active = new Map;
 const services_list_react = async () => {
 	await Promise.all(
@@ -110,11 +125,9 @@ const services_list_react = async () => {
 			.filter(([path, _]) => !services.has(path))
 			.map(([_, service_object]) => service_stop(service_object, true))
 	);
-	await Promise.all(
-		Array.from(services)
-			.filter(path => !services_active.has(path))
-			.map(path => service_start(path))
-	);
+	for (const path of services) {
+		if (!services_active.has(path)) await service_start(path);
+	}
 }
 const service_start = async path => {
 	const service_object = {
@@ -138,11 +151,12 @@ const service_start = async path => {
 const service_start_inner = async (path, service_object, file_content) => {
 	try {
 		const fun = new Function(
+			'require',
 			`const log=a=>rtjscomp.log(${
 				JSON.stringify(path + ': ')
 			}+a);${file_content}`
 		);
-		fun.call(service_object);
+		fun.call(service_object, custom_require);
 	}
 	catch (err) {
 		log(`error in service ${path}: ${err.message}`);
@@ -251,9 +265,9 @@ const file_keep_new = async (path, callback) => {
 	}
 }
 
-let log_history = [];
+let log_history = rtjscomp.log_history = [];
 actions.log_clear = () => {
-	log_history = [];
+	log_history = rtjscomp.log_history = [];
 }
 const log = rtjscomp.log = msg => (
 	console.log(msg),
@@ -262,14 +276,14 @@ const log = rtjscomp.log = msg => (
 )
 
 const spam_enabled = fs.existsSync('spam.csv');
-let spam_history = '';
-actions.spam_save = async () => {
+rtjscomp.spam_history = '';
+actions.spam_save = async (muted = false) => {
 	if (!spam_enabled) return;
 
 	try {
-		fsp.appendFile('spam.csv', spam_history, 'utf8');
-		spam_history = '';
-		log('spam.csv saved');
+		fsp.appendFile('spam.csv', rtjscomp.spam_history, 'utf8');
+		rtjscomp.spam_history = '';
+		muted || log('spam.csv saved');
 	}
 	catch (err) {
 		log('error saving spam.csv: ' + err.message);
@@ -278,7 +292,7 @@ actions.spam_save = async () => {
 const spam = (type, data) => {
 	if (!spam_enabled) return;
 
-	spam_history += (
+	rtjscomp.spam_history += (
 		Date.now() +
 		',' +
 		type +
@@ -287,7 +301,7 @@ const spam = (type, data) => {
 		'\n'
 	);
 
-	if (spam_history.length >= 1e5) {
+	if (rtjscomp.spam_history.length >= 1e5) {
 		actions.spam_save();
 	}
 }
@@ -430,7 +444,7 @@ const request_handle = async (request, response, https) => {
 					}
 					const file_content_length = file_content.length;
 
-					let code = `async (input,output,request,response)=>{const log=a=>rtjscomp.log(${
+					let code = `async (input,output,request,response,require)=>{const log=a=>rtjscomp.log(${
 						JSON.stringify(path + ': ')
 					}+a);`;
 
@@ -644,7 +658,8 @@ const request_handle = async (request, response, https) => {
 					file_function_input,
 					file_function_output,
 					request,
-					response
+					response,
+					custom_require
 				);
 				file_function_output.end();
 			}
@@ -786,12 +801,13 @@ await Promise.all([
 await Promise.all([
 	file_keep_new(PATH_CONFIG + 'init.js', data => {
 		if (!data) return;
-		log('[deprecated] run global init script');
+		log('[deprecated!] run global init script');
 		try {
+			var require = custom_require;
 			eval(data);
 		}
 		catch (err) {
-			log('error while initialising: ' + err.message);
+			log('error in init.js: ' + err.message);
 		}
 	}),
 	file_keep_new(PATH_CONFIG + 'services.txt', async data => {
