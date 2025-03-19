@@ -1,14 +1,14 @@
 {
 	"name": "rtjscomp",
-	"author": "L3P3 <dev@l3p3.de> (https://l3p3.de)",
-	"license": "Zlib",
-	"version": "0.8.1",
+	"version": "0.8.2",
 	"description": "php-like server but with javascript",
-	"keywords": [
-		"http",
-		"javascript",
-		"server"
-	],
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/L3P3/rtjscomp"
+	},
+	"bugs": {
+		"url": "https://github.com/L3P3/rtjscomp/issues"
+	},
 	"dependencies": {
 		"ipware": "latest",
 		"parse-multipart-data": "latest",
@@ -19,5 +19,12 @@
 	},
 	"bin": {
 		"rtjscomp": "./rtjscomp.js"
-	}
+	},
+	"keywords": [
+		"http",
+		"javascript",
+		"server"
+	],
+	"author": "L3P3 <dev@l3p3.de> (https://l3p3.de)",
+	"license": "Zlib"
 }
