@@ -26,6 +26,7 @@ const AGENT_CHECK_BOT = /bot|googlebot|crawler|spider|robot|crawling|favicon/i;
 const AGENT_CHECK_MOBIL = /(android|bb\d+|meego).+mobile|avantgo|bada\/|blackberry|blazer|compal|elaine|fennec|hiptop|iemobile|ip(hone|od)|iris|kindle|lge |maemo|midp|mmp|mobile.+firefox|netfront|opera m(ob|in)i|palm( os)?|phone|p(ixi|re)\/|plucker|pocket|psp|series(4|6)0|symbian|treo|up\.(browser|link)|vodafone|wap|windows ce|xda|xiino|android|ipad|playbook|silk/i;
 const HTTP_LIST_REG = /,\s*/;
 
+let log_verbose = process.argv.includes('-v');
 let port_http = 0;
 let port_https = 0;
 const file_type_mimes = new Map;
@@ -61,7 +62,7 @@ if (!Object.fromEntries) {
 global.globals = rtjscomp;
 global.actions = rtjscomp.actions;
 global.data_load = name => {
-	log('[deprecated!] load: ' + name);
+	log('[deprecated] load: ' + name);
 	try {
 		return fs.readFileSync(PATH_DATA + name, 'utf8');
 	}
@@ -70,7 +71,7 @@ global.data_load = name => {
 	}
 }
 global.data_save = (name, data) => (
-	log('[deprecated!] save: ' + name),
+	log('[deprecated] save: ' + name),
 	fs.writeFileSync(PATH_DATA + name, data, 'utf8')
 )
 global.number_check_int = number => (
@@ -81,13 +82,12 @@ global.number_check_uint = number => (
 )
 
 rtjscomp.data_load = async name => {
-	log('load: ' + name);
+	if (log_verbose) log('load: ' + PATH_DATA + name);
 	const data = await fsp.readFile(PATH_DATA + name, 'utf8').catch(() => null);
 	return name.endsWith('.json') ? JSON.parse(data || null) : data;
 }
 rtjscomp.data_load_watch = (name, callback) => (
 	file_keep_new(PATH_DATA + name, data => (
-		log('load: ' + name),
 		callback(
 			name.endsWith('.json')
 			?	JSON.parse(data || null)
@@ -96,7 +96,7 @@ rtjscomp.data_load_watch = (name, callback) => (
 	))
 )
 rtjscomp.data_save = (name, data) => (
-	log('save: ' + name),
+	log_verbose && log('save: ' + PATH_DATA + name),
 	fsp.writeFile(
 		PATH_DATA + name,
 		name.endsWith('.json') ? JSON.stringify(data) : data,
@@ -119,68 +119,99 @@ const custom_require = path => {
 }
 
 const services_active = new Map;
+const services_loading = new Set;
 const services_list_react = async () => {
 	await Promise.all(
 		Array.from(services_active.entries())
 			.filter(([path, _]) => !services.has(path))
 			.map(([_, service_object]) => service_stop(service_object, true))
 	);
-	for (const path of services) {
-		if (!services_active.has(path)) await service_start(path);
+	for (const path of services)
+	if (!services_active.has(path)) {
+		await service_start(path);
 	}
 }
 const service_start = async path => {
 	const service_object = {
+		content: null,
+		handler_stop: null,
 		path,
-		start: null,
-		started: false,
-		stop: null,
 		stopped: false,
 	};
 
 	await file_keep_new(PATH_PUBLIC + path + '.service.js', async file_content => {
 		if (file_content === null) {
-			log('error, service file not found: ' + path);
-			await service_stop(service_object, true);
-			return;
+			log('[error] service file not found: ' + path);
+			return service_stop(service_object, true);
 		}
-		await service_stop_handler(service_object);
-		await service_start_inner(path, service_object, file_content);
+		if (services_loading.size > 0) {
+			await Promise.all(Array.from(services_loading));
+		}
+		const start_promise = service_start_inner(path, service_object, file_content);
+		services_loading.add(start_promise);
+		await start_promise;
+		services_loading.delete(start_promise);
 	});
 }
 const service_start_inner = async (path, service_object, file_content) => {
-	try {
-		const fun = new Function(
-			'require',
-			`const log=a=>rtjscomp.log(${
-				JSON.stringify(path + ': ')
-			}+a);${file_content}`
-		);
-		fun.call(service_object, custom_require);
+	if (services_active.has(path)) {
+		await service_stop_handler(service_object);
 	}
-	catch (err) {
-		log(`error in service ${path}: ${err.message}`);
-		await service_stop(service_object, false);
-		return;
-	}
+	const content_object = service_object.content = {};
+	log('start service: ' + path);
 
-	if (service_object.start) {
-		try {
-			await service_object.start();
-			service_object.start = null;
-			service_object.started = true;
-		}
-		catch (err) {
-			services_active.delete(path);
-			log(`error while starting ${path}: ${err.message}`);
+	const start_interval = setInterval(() => {
+		log('[warning] still starting service: ' + path);
+	}, 1e3);
+
+	try {
+		const fun = (0, eval)(
+			`(async function(require){const log=a=>rtjscomp.log(${
+				JSON.stringify(path + ': ')
+			}+a);${file_content + '\n'}})`
+		);
+		const result = await fun.call(content_object, custom_require);
+		if (service_object.stopped) {
+			clearInterval(start_interval);
 			return;
 		}
+		if (typeof result === 'function') {
+			service_object.handler_stop = result;
+		}
 	}
+	catch (err) {
+		clearInterval(start_interval);
+		log(`[error] ${path}: ${err.message}`);
+		if (service_object.stopped) return;
+		return service_stop(service_object, false);
+	}
+
+	const handler_start = content_object.start;
+	if (handler_start) {
+		log('[deprecated] service has start method: ' + path);
+		delete content_object.start;
+		try {
+			await handler_start();
+		}
+		catch (err) {
+			clearInterval(start_interval);
+			log(`[error] ${path} start: ${err.message}`);
+			return service_stop(service_object, false);
+		}
+	}
+	clearInterval(start_interval);
+
+	if (content_object.stop) {
+		log('[deprecated] service has stop method: ' + path);
+		service_object.handler_stop = content_object.stop;
+		delete content_object.stop;
+	}
+
 	services_active.set(path, service_object);
-	log('service started: ' + path);
+	if (log_verbose) log('started service: ' + path);
 }
 const services_shutdown = () => (
-	log('shutdown services...'),
+	log_verbose && log('shutdown services...'),
 	Promise.all(
 		Array.from(services_active.values())
 			.map(service_object => service_stop(service_object, true))
@@ -190,28 +221,39 @@ const service_stop = async (service_object, forget) => {
 	service_object.stopped = true;
 	if (forget) fs.unwatchFile(PATH_PUBLIC + service_object.path + '.service.js');
 	await service_stop_handler(service_object);
-	services_active.delete(service_object.path);
-	log('service stopped: ' + service_object.path);
 }
 const service_stop_handler = async service_object => {
-	if (service_object.stop) {
+	services_active.delete(service_object.path);
+	log('stop service: ' + service_object.path);
+	const handler_stop = service_object.handler_stop;
+	if (handler_stop) {
+		const stop_interval = setInterval(() => {
+			log('[warning] still stopping service: ' + service_object.path);
+		}, 1e3);
 		try {
-			await service_object.stop();
-			service_object.stop = null;
+			service_object.handler_stop = null;
+			await handler_stop();
 		}
 		catch (err) {
-			log(`error while stopping ${service_object.path}: ${err.message}`);
+			log(`[error] ${service_object.path} stop: ${err.message}`);
 		}
+		clearInterval(stop_interval);
 	}
+	if (log_verbose) log('stopped service: ' + service_object.path);
 }
 global.service_require = path => {
 	const service = services_active.get(path);
-	if (service) return service;
+	if (service != null) return service.content;
 	throw new Error('service required: ' + path);
 }
-global.service_require_try = path => (
-	services_active.get(path) || null
-)
+global.service_require_try = path => {
+	const service = services_active.get(path);
+	return (
+		service != null
+		?	service.content
+		:	null
+	);
+}
 
 const map_generate_bol = (set, data) => {
 	set.clear();
@@ -237,7 +279,7 @@ const map_generate_equ = (map, data) => {
 
 const file_compare = (curr, prev, path) => (
 	curr.mtime > prev.mtime && (
-		log('file changed: ' + path),
+		log_verbose && log('file changed: ' + path),
 		true
 	)
 )
@@ -251,7 +293,9 @@ const file_watch = (path, callback) => (
 )
 const file_keep_new = async (path, callback) => {
 	try {
-		await callback(await fsp.readFile(path, 'utf8'));
+		const data = await fsp.readFile(path, 'utf8');
+		if (log_verbose) log('load file: ' + path);
+		await callback(data);
 		fs.watchFile(path, async (curr, prev) => {
 			if (file_compare(curr, prev, path)) {
 				await callback(
@@ -272,7 +316,7 @@ actions.log_clear = () => {
 const log = rtjscomp.log = msg => (
 	console.log(msg),
 	log_history.push(msg),
-	spam('log', [msg])
+	spam_enabled ? spam('log', [msg]) : undefined
 )
 
 const spam_enabled = fs.existsSync('spam.csv');
@@ -281,17 +325,16 @@ actions.spam_save = async (muted = false) => {
 	if (!spam_enabled) return;
 
 	try {
-		fsp.appendFile('spam.csv', rtjscomp.spam_history, 'utf8');
+		const tmp = rtjscomp.spam_history;
 		rtjscomp.spam_history = '';
-		muted || log('spam.csv saved');
+		await fsp.appendFile('spam.csv', tmp, 'utf8');
+		if (log_verbose && !muted) log('spam.csv saved');
 	}
 	catch (err) {
-		log('error saving spam.csv: ' + err.message);
+		log('[error] cannot save spam.csv: ' + err.message);
 	}
 }
 const spam = (type, data) => {
-	if (!spam_enabled) return;
-
 	rtjscomp.spam_history += (
 		Date.now() +
 		',' +
@@ -315,7 +358,7 @@ const request_handle = async (request, response, https) => {
 		https = request_headers['x-forwarded-proto'] === 'https';
 	}
 
-	spam('request', [https, request.url, request_ip]);
+	if (spam_enabled) spam('request', [https, request.url, request_ip]);
 
 	try {
 		const request_url_parsed = url.parse(request.url, false);
@@ -422,11 +465,11 @@ const request_handle = async (request, response, https) => {
 			file_function = file_cache_functions.get(path);
 		}
 		else {
-			log(`load ${
+			if (log_verbose) log(`load ${
 				file_dyn_enabled
 				?	'dynam'
 				:	'stat'
-			}ic file: ${path}`);
+			}ic file: ${path_real}`);
 
 			if (
 				file_privates.has(path) ||
@@ -516,14 +559,14 @@ const request_handle = async (request, response, https) => {
 					}
 
 					try {
-						file_function = eval(code += '}');
+						file_function = (0, eval)(code += '}');
 					}
 					catch (err) {
 						throw err.message;
 					}
 				}
 				catch (err) {
-					log('compile error: ' + err);
+					log(`[error] ${path} compile: ${err}`);
 					throw 500;
 				}
 
@@ -578,7 +621,7 @@ const request_handle = async (request, response, https) => {
 					);
 				}
 				catch (err) {
-					log('request query error: ' + err.message);
+					log(`[error] ${path} request query: ${err.message}`);
 					throw 400;
 				}
 			}
@@ -613,7 +656,7 @@ const request_handle = async (request, response, https) => {
 					}
 				}
 				catch (err) {
-					log('request body error: ' + err.message);
+					log(`[error] ${path} request body: ${err.message}`);
 					throw 400;
 				}
 			}
@@ -641,7 +684,7 @@ const request_handle = async (request, response, https) => {
 				file_function_output = response;
 			}
 
-			spam('execute', [
+			if (spam_enabled) spam('execute', [
 				path,
 				Object.fromEntries(
 					Object.entries(file_function_input)
@@ -652,6 +695,10 @@ const request_handle = async (request, response, https) => {
 						.map(e => (e[0] !== 'user_agent' && typeof e[1] === 'string' && e[1].length > 20) ? [e[0], e[1].substr(0, 20) + '...'] : e)
 				)
 			]);
+
+			if (services_loading.size > 0) {
+				await Promise.all(Array.from(services_loading));
+			}
 
 			try {
 				await file_function(
@@ -665,7 +712,7 @@ const request_handle = async (request, response, https) => {
 			}
 			catch (err) {
 				if (err instanceof Error) {
-					log(`error in file ${path}: ${err.message}`);
+					log(`[error] ${path}: ${err.message}`);
 
 					if (err.message.startsWith('service required: ')) {
 						err = 503;
@@ -698,7 +745,7 @@ const request_handle = async (request, response, https) => {
 				file_data = fs.createReadStream(path_real);
 			}
 
-			spam('static_send', [path, file_gz_enabled]);
+			if (spam_enabled) spam('static_send', [path, file_gz_enabled]);
 			response.setHeader('Cache-Control', 'public, max-age=600');
 
 			if (file_gz_enabled) {
@@ -718,8 +765,8 @@ const request_handle = async (request, response, https) => {
 			err = 500;
 		}
 
-		if (err >= 400) {
-			log(`error ${err} at request: ${request_ip}; ${request.url}`);
+		if (err >= 400 && log_verbose) {
+			log(`[error] request failed: ${err}; ${request_ip}; ${request.url}`);
 		}
 
 		response.writeHead(err, {
@@ -733,32 +780,33 @@ const request_handle = async (request, response, https) => {
 let exiting = false;
 actions.halt = async () => {
 	await Promise.all([
-		actions.http_stop(),
+		actions.http_stop && actions.http_stop(),
 		actions.https_stop && actions.https_stop(),
 		services_shutdown(),
-	].filter(Boolean));
+	]);
 	await actions.spam_save();
 	log('stopped everything');
 }
 actions.exit = async status => {
 	if (exiting) return;
+	exiting = true;
 	if (typeof status !== 'number') status = 0;
 	await actions.halt();
 	log('exiting...');
-	exiting = true;
 	process.exit(status);
 }
 
 process.on('uncaughtException', err => {
-	err = err.message || err;
 	if (typeof err === 'symbol') err = err.toString();
-	log('error uncaughtException: ' + err);
-	console.log(err);
+	log('[error] uncaughtException: ' + (err.message || err));
+	console.error(err);
+	if (exiting) process.exit(1);
 	actions.exit(1);
 });
 process.on('unhandledRejection', err => {
-	log('error unhandledRejection: ' + (err.message || err));
-	console.log(err);
+	log('[error] unhandledRejection: ' + (err.message || err));
+	console.error(err);
+	if (exiting) process.exit(1);
 	actions.exit(1);
 });
 process.on('exit', actions.exit);
@@ -776,7 +824,7 @@ await Promise.all([
 	fsp.stat(PATH_PUBLIC).catch(_ => null),
 ]).then(([stat_config, stat_data, stat_public]) => {
 	if (!stat_config) {
-		log('creating config template directory');
+		log('create config template directory');
 		fs.mkdirSync(PATH_CONFIG);
 		fs.mkdirSync(PATH_CONFIG + 'ssl');
 		for (const file of 'file_type_dyns,file_type_mimes,file_type_nocompress,path_aliases,port_http,port_https,services'.split(',')) {
@@ -798,32 +846,30 @@ await Promise.all([
 	}
 });
 
+file_keep_new(PATH_CONFIG + 'services.txt', data => (
+	map_generate_bol(services, data),
+	services_list_react()
+));
+
 await Promise.all([
 	file_keep_new(PATH_CONFIG + 'init.js', data => {
 		if (!data) return;
-		log('[deprecated!] run global init script');
+		log('[deprecated] run global init script');
 		try {
 			var require = custom_require;
-			eval(data);
+			(0, eval)(data);
 		}
 		catch (err) {
-			log('error in init.js: ' + err.message);
+			log('[error] init.js: ' + err.message);
 		}
 	}),
-	file_keep_new(PATH_CONFIG + 'services.txt', async data => {
-		log('load service list');
-		map_generate_bol(services, data);
-		await services_list_react();
-	}),
 	file_keep_new(PATH_CONFIG + 'file_type_mimes.txt', data => {
-		log('load file type map');
 		map_generate_equ(file_type_mimes, data);
 		if (!file_type_mimes.has('txt')) {
 			file_type_mimes.set('txt', 'text/plain; charset=utf-8');
 		}
 	}),
 	file_keep_new(PATH_CONFIG + 'path_aliases.txt', data => {
-		log('load path aliases map');
 		map_generate_equ(path_aliases, data);
 		path_aliases_templates.clear();
 		for (const [key, value] of path_aliases.entries()) {
@@ -843,38 +889,37 @@ await Promise.all([
 		}
 	}),
 	file_keep_new(PATH_CONFIG + 'file_type_dyns.txt', data => {
-		log('load dynamic file type list');
 		map_generate_bol(file_type_dyns, data);
 	}),
 	file_keep_new(PATH_CONFIG + 'file_type_nocompress.txt', data => {
-		log('load non-compressable file list');
 		map_generate_bol(file_type_nocompress, data);
 	}),
 	file_keep_new(PATH_CONFIG + 'file_raws.txt', data => {
 		if (!data) return;
-		log('load static file list');
 		map_generate_bol(file_raws, data);
 	}),
 	file_keep_new(PATH_CONFIG + 'file_privates.txt', data => {
 		if (!data) return;
-		log('load private file list');
 		map_generate_bol(file_privates, data);
 	}),
 	file_keep_new(PATH_CONFIG + 'file_blocks.txt', data => {
 		if (!data) return;
-		log('load blocked file list');
 		map_generate_bol(file_blocks, data);
 	}),
 ]);
 
 let connections_count = 0;
+let http_status = false;
+let http_status_target = false;
+let http_listened_resolve = null;
+const http_connections = new Map;
 const server_http = http.createServer(
 	(request, response) => request_handle(request, response, false)
 );
-let http_status = false;
-let http_status_target = false;
-const http_connections = new Map;
-
+server_http.on('error', err => {
+	log('[error] http: ' + err.message);
+	http_listened_resolve && http_listened_resolve();
+});
 server_http.on('connection', connection => {
 	const id = ++connections_count;
 	http_connections.set(id, connection);
@@ -883,71 +928,67 @@ server_http.on('connection', connection => {
 	});
 });
 
-actions.http_start = () => {
-	if (http_status) return;
-	try {
-		server_http.listen(port_http);
-		http_status = http_status_target = true;
-		log('http started at port ' + port_http);
-	}
-	catch (err) {
-		log('error while starting http: ' + err.message);
-	}
-}
-actions.http_restart = () => {
-	if (!http_status) actions.http_start();
-	else if (http_status_target) {
-		http_status_target = false;
-		log('http is restarting...');
-		server_http.close(() => {
-			http_status = false;
-			log('http stopped');
-			actions.http_start();
-		});
+actions.http_start = async () => {
+	await actions.http_stop();
+	http_status_target = true;
+	log('start http: http://localhost:' + port_http);
+	await new Promise(resolve => server_http.listen(port_http, http_listened_resolve = resolve));
+	if (http_listened_resolve) http_listened_resolve = null;
+	else{
+		http_status = true;
+		if (log_verbose) log('started http');
 	}
 }
 actions.http_stop = async () => {
-	if (!http_status_target || !http_status) return;
+	if (!http_status_target) return;
 	http_status_target = false;
-	log('http is stopping...');
+	log('stop http');
+	const kill_timeout = setTimeout(actions.http_kill, 5e3);
 	await new Promise(resolve => server_http.close(resolve));
+	clearTimeout(kill_timeout);
 	http_status = false;
-	log('http stopped');
+	if (log_verbose) log('stopped http');
 }
-actions.http_kill = () => {
-	if (http_status_target || !http_status) return;
-	log('killing http...');
-	for (const connection of http_connections.values()) connection.destroy();
+actions.http_kill = async () => {
+	if (http_status_target) return;
+	log('kill http');
+	await Promise.all(
+		Array.from(http_connections.values())
+			.map(connection => connection.destroy())
+	);
+	if (log_verbose) log('killed http');
 	http_connections.clear();
 }
 
 file_keep_new(PATH_CONFIG + 'port_http.txt', data => {
-	log('load http port number');
 	if (
 		!data ||
 		isNaN(data = Number(data)) ||
 		!number_check_uint(data)
 	) {
-		log('error: invalid http port number');
+		log('[error] http: invalid port number');
 	}
 	else if (data !== port_http) {
 		port_http = data;
-		actions.http_restart();
+		actions.http_start();
 	}
 });
 
 try {
 	const https_key = fs.readFileSync(PATH_CONFIG + 'ssl/domain.key');
 	const https_cert = fs.readFileSync(PATH_CONFIG + 'ssl/chained.pem');
+	let https_status = false;
+	let https_status_target = false;
+	let https_listened_resolve = null;
+	const https_connections = new Map;
 	const server_https = require('https').createServer(
 		{key: https_key, cert: https_cert},
 		(request, response) => request_handle(request, response, true)
 	);
-
-	let https_status = false;
-	let https_status_target = false;
-	const https_connections = new Map;
-
+	server_https.on('error', err => {
+		log('[error] https: ' + err.message);
+		https_listened_resolve && https_listened_resolve();
+	});
 	server_https.on('connection', connection => {
 		const id = ++connections_count;
 		https_connections.set(id, connection);
@@ -956,61 +997,53 @@ try {
 		});
 	});
 
-	actions.https_start = () => {
-		if (https_status) return;
-		try {
-			server_https.listen(port_https);
-			https_status = https_status_target = true;
-			log('https started at port ' + port_https);
-		}
-		catch (err) {
-			log('error while starting https: ' + err.message);
-		}
-	}
-	actions.https_restart = () => {
-		if (!https_status) actions.https_start();
-		else if (https_status_target) {
-			https_status_target = false;
-			log('https is restarting...');
-			server_https.close(function () {
-				https_status = false;
-				log('https stopped');
-				actions.https_start();
-			});
+	actions.https_start = async () => {
+		await actions.https_stop();
+		https_status_target = true;
+		log('start https: https://localhost:' + port_https);
+		await new Promise(resolve => server_https.listen(port_https, https_listened_resolve = resolve));
+		if (https_listened_resolve) https_listened_resolve = null;
+		else{
+			https_status = true;
+			if (log_verbose) log('started https');
 		}
 	}
 	actions.https_stop = async () => {
-		if (!https_status_target || !https_status) return;
+		if (!https_status_target) return;
 		https_status_target = false;
-		log('https is stopping...');
+		log('stop https');
+		const kill_timeout = setTimeout(actions.https_kill, 5000);
 		await new Promise(resolve => server_https.close(resolve));
+		clearTimeout(kill_timeout);
 		https_status = false;
-		log('https stopped');
+		if (log_verbose) log('stopped https');
 	}
-	actions.https_kill = () => {
-		if (https_status_target || !https_status) return;
-		log('killing https...');
-		for (const connection of https_connections.values()) connection.destroy();
+	actions.https_kill = async () => {
+		if (https_status_target) return;
+		log('kill https');
+		await Promise.all(
+			Array.from(https_connections.values()).map(connection => connection.destroy())
+		);
+		if (log_verbose) log('killed https');
 		https_connections.clear();
 	}
 
 	file_keep_new(PATH_CONFIG + 'port_https.txt', data => {
-		log('load https port number');
 		if (
 			!data ||
 			isNaN(data = Number(data)) ||
 			!number_check_uint(data)
 		) {
-			log('error: invalid https port number');
+			log('[error] https: invalid port number');
 		}
 		else if (data !== port_https) {
 			port_https = data;
-			actions.https_restart();
+			actions.https_start();
 		}
 	});
 }
 catch (err) {
-	log('https is disabled');
+	if (log_verbose) log('https: no cert, disabled');
 }
 
 })();
