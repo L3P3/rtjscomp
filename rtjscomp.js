@@ -25,6 +25,7 @@ const GZIP_OPTIONS = {level: 9};
 const AGENT_CHECK_BOT = /bot|googlebot|crawler|spider|robot|crawling|favicon/i;
 const AGENT_CHECK_MOBIL = /(android|bb\d+|meego).+mobile|avantgo|bada\/|blackberry|blazer|compal|elaine|fennec|hiptop|iemobile|ip(hone|od)|iris|kindle|lge |maemo|midp|mmp|mobile.+firefox|netfront|opera m(ob|in)i|palm( os)?|phone|p(ixi|re)\/|plucker|pocket|psp|series(4|6)0|symbian|treo|up\.(browser|link)|vodafone|wap|windows ce|xda|xiino|android|ipad|playbook|silk/i;
 const HTTP_LIST_REG = /,\s*/;
+const IMPORT_REG = /import\(/g;
 
 let log_verbose = process.argv.includes('-v');
 let port_http = 0;
@@ -62,7 +63,7 @@ if (!Object.fromEntries) {
 global.globals = rtjscomp;
 global.actions = rtjscomp.actions;
 global.data_load = name => {
-	log('[deprecated] load: ' + name);
+	log('[deprecated] synchronous load: ' + PATH_DATA + name);
 	try {
 		return fs.readFileSync(PATH_DATA + name, 'utf8');
 	}
@@ -71,7 +72,7 @@ global.data_load = name => {
 	}
 }
 global.data_save = (name, data) => (
-	log('[deprecated] save: ' + name),
+	log('[deprecated] synchronous save: ' + PATH_DATA + name),
 	fs.writeFileSync(PATH_DATA + name, data, 'utf8')
 )
 global.number_check_int = number => (
@@ -104,18 +105,41 @@ rtjscomp.data_save = (name, data) => (
 	)
 )
 
+const custom_require_paths = new Set;
 const custom_require_cache = new Map;
+const custom_import_cache = new Map;
 const custom_require = path => {
 	let result = custom_require_cache.get(path);
 	if (result != null) return result;
 
+	log_verbose && log('require: ' + path);
+	const path_real = require.resolve(path, resolve_options);
+	custom_require_paths.add(path_real);
 	custom_require_cache.set(
 		path,
-		result = require(
-			require.resolve(path, resolve_options)
+		result = require(path_real)
+	);
+	return result;
+}
+const custom_import = async path => {
+	let result = custom_import_cache.get(path);
+	if (result != null) return result;
+
+	log_verbose && log('import: ' + path);
+	custom_import_cache.set(
+		path,
+		result = await import(
+			'file://' + require.resolve(path, resolve_options)
 		)
 	);
 	return result;
+}
+actions.module_cache_clear = () => {
+	for (const path of custom_require_paths) {
+		delete require.cache[path];
+	}
+	custom_require_cache.clear();
+	custom_import_cache.clear();
 }
 
 const services_active = new Map;
@@ -161,16 +185,22 @@ const service_start_inner = async (path, service_object, file_content) => {
 	log('start service: ' + path);
 
 	const start_interval = setInterval(() => {
-		log('[warning] still starting service: ' + path);
+		log(`[warning] ${path}: still starting`);
 	}, 1e3);
+
+	if (file_content.includes('globals.')) {
+		log(`[deprecated] ${path}: uses globals object`);
+	}
 
 	try {
 		const fun = (0, eval)(
-			`(async function(require){const log=a=>rtjscomp.log(${
+			`(async function(require,custom_import){const log=a=>rtjscomp.log(${
 				JSON.stringify(path + ': ')
-			}+a);${file_content + '\n'}})`
+			}+a);${
+				file_content.replace(IMPORT_REG, 'custom_import(') + '\n'
+			}})`
 		);
-		const result = await fun.call(content_object, custom_require);
+		const result = await fun.call(content_object, custom_require, custom_import);
 		if (service_object.stopped) {
 			clearInterval(start_interval);
 			return;
@@ -188,7 +218,7 @@ const service_start_inner = async (path, service_object, file_content) => {
 
 	const handler_start = content_object.start;
 	if (handler_start) {
-		log('[deprecated] service has start method: ' + path);
+		log(`[deprecated] ${path}: has start method`);
 		delete content_object.start;
 		try {
 			await handler_start();
@@ -202,7 +232,7 @@ const service_start_inner = async (path, service_object, file_content) => {
 	clearInterval(start_interval);
 
 	if (content_object.stop) {
-		log('[deprecated] service has stop method: ' + path);
+		log(`[deprecated] ${path}: has stop method`);
 		service_object.handler_stop = content_object.stop;
 		delete content_object.stop;
 	}
@@ -228,7 +258,7 @@ const service_stop_handler = async service_object => {
 	const handler_stop = service_object.handler_stop;
 	if (handler_stop) {
 		const stop_interval = setInterval(() => {
-			log('[warning] still stopping service: ' + service_object.path);
+			log(`[warning] ${service_object.path}: still stopping`);
 		}, 1e3);
 		try {
 			service_object.handler_stop = null;
@@ -485,9 +515,12 @@ const request_handle = async (request, response, https) => {
 					if (file_content.includes('\r')) {
 						throw 'illegal line break, must be unix';
 					}
+					if (file_content.includes('globals.')) {
+						log(`[deprecated] ${path}: uses globals object`);
+					}
 					const file_content_length = file_content.length;
 
-					let code = `async (input,output,request,response,require)=>{const log=a=>rtjscomp.log(${
+					let code = `async (input,output,request,response,require,custom_import)=>{const log=a=>rtjscomp.log(${
 						JSON.stringify(path + ': ')
 					}+a);`;
 
@@ -512,19 +545,23 @@ const request_handle = async (request, response, https) => {
 								// `<?`?
 								if (file_content.charCodeAt(index_start) !== 61) {
 									code += (
-										file_content.substring(
-											index_start,
-											index_end
-										) +
+										file_content
+											.substring(
+												index_start,
+												index_end
+											)
+											.replace(IMPORT_REG, 'custom_import(') +
 										';'
 									);
 								}
 								else { // `<?=`?
 									code += `output.write(''+(${
-										file_content.substring(
-											++index_start,
-											index_end
-										)
+										file_content
+											.substring(
+												++index_start,
+												index_end
+											)
+											.replace(IMPORT_REG, 'custom_import(')
 									}));`;
 								}
 							}
@@ -706,7 +743,8 @@ const request_handle = async (request, response, https) => {
 					file_function_output,
 					request,
 					response,
-					custom_require
+					custom_require,
+					custom_import
 				);
 				file_function_output.end();
 			}
