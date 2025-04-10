@@ -22,6 +22,7 @@ const PATH_PUBLIC = 'public/';
 const PATH_CONFIG = 'config/';
 const PATH_DATA = 'data/';
 const GZIP_OPTIONS = {level: 9};
+const WATCH_OPTIONS = {persistent: true, interval: 1000};
 const AGENT_CHECK_BOT = /bot|googlebot|crawler|spider|robot|crawling|favicon/i;
 const AGENT_CHECK_MOBIL = /(android|bb\d+|meego).+mobile|avantgo|bada\/|blackberry|blazer|compal|elaine|fennec|hiptop|iemobile|ip(hone|od)|iris|kindle|lge |maemo|midp|mmp|mobile.+firefox|netfront|opera m(ob|in)i|palm( os)?|phone|p(ixi|re)\/|plucker|pocket|psp|series(4|6)0|symbian|treo|up\.(browser|link)|vodafone|wap|windows ce|xda|xiino|android|ipad|playbook|silk/i;
 const HTTP_LIST_REG = /,\s*/;
@@ -57,6 +58,29 @@ if (!Object.fromEntries) {
 		for (const entry of entries) object[entry[0]] = entry[1];
 		return object;
 	};
+}
+
+// workaround for bun: https://github.com/oven-sh/bun/issues/18919
+let fs_watch = fs.watch;
+if (typeof Bun !== 'undefined') {
+	const fs_watch_original = fs_watch;
+	const watch_callbacks = new Map;
+	fs_watch = (path, options, callback) => {
+		if (!watch_callbacks.has(path)) {
+			fs_watch_original(path, options, () => {
+				const callback = watch_callbacks.get(path);
+				if (callback) {
+					callback();
+				}
+			});
+		}
+		watch_callbacks.set(path, callback);
+		return {
+			close: () => (
+				watch_callbacks.set(path, null)
+			),
+		};
+	}
 }
 
 // legacy, will be removed soon!
@@ -141,6 +165,7 @@ actions.module_cache_clear = () => {
 	custom_require_cache.clear();
 	custom_import_cache.clear();
 }
+const AsyncFunction = custom_import.constructor;
 
 const services_active = new Map;
 const services_loading = new Set;
@@ -161,21 +186,25 @@ const service_start = async path => {
 		handler_stop: null,
 		path,
 		stopped: false,
+		watcher: null,
 	};
 
-	await file_keep_new(PATH_PUBLIC + path + '.service.js', async file_content => {
-		if (file_content === null) {
-			log('[error] service file not found: ' + path);
-			return service_stop(service_object, true);
+	service_object.watcher = await file_keep_new(
+		PATH_PUBLIC + path + '.service.js',
+		async file_content => {
+			if (file_content === null) {
+				log('[error] service file not found: ' + path);
+				return service_stop(service_object, true);
+			}
+			if (services_loading.size > 0) {
+				await Promise.all(Array.from(services_loading));
+			}
+			const start_promise = service_start_inner(path, service_object, file_content);
+			services_loading.add(start_promise);
+			await start_promise;
+			services_loading.delete(start_promise);
 		}
-		if (services_loading.size > 0) {
-			await Promise.all(Array.from(services_loading));
-		}
-		const start_promise = service_start_inner(path, service_object, file_content);
-		services_loading.add(start_promise);
-		await start_promise;
-		services_loading.delete(start_promise);
-	});
+	);
 }
 const service_start_inner = async (path, service_object, file_content) => {
 	if (services_active.has(path)) {
@@ -193,14 +222,15 @@ const service_start_inner = async (path, service_object, file_content) => {
 	}
 
 	try {
-		const fun = (0, eval)(
-			`(async function(require,custom_import){const log=a=>rtjscomp.log(${
+		const result = await (new AsyncFunction(
+			'require',
+			'custom_import',
+			`const log=a=>rtjscomp.log(${
 				JSON.stringify(path + ': ')
 			}+a);${
 				file_content.replace(IMPORT_REG, 'custom_import(') + '\n'
-			}})`
-		);
-		const result = await fun.call(content_object, custom_require, custom_import);
+			}`
+		)).call(content_object, custom_require, custom_import);
 		if (service_object.stopped) {
 			clearInterval(start_interval);
 			return;
@@ -247,11 +277,12 @@ const services_shutdown = () => (
 			.map(service_object => service_stop(service_object, true))
 	)
 )
-const service_stop = async (service_object, forget) => {
-	service_object.stopped = true;
-	if (forget) fs.unwatchFile(PATH_PUBLIC + service_object.path + '.service.js');
-	await service_stop_handler(service_object);
-}
+const service_stop = (service_object, forget) => (
+	service_object.stopped = true,
+	forget && service_object.watcher &&
+		service_object.watcher.close(),
+	service_stop_handler(service_object)
+)
 const service_stop_handler = async service_object => {
 	services_active.delete(service_object.path);
 	log('stop service: ' + service_object.path);
@@ -307,36 +338,34 @@ const map_generate_equ = (map, data) => {
 	}
 }
 
-const file_compare = (curr, prev, path) => (
-	curr.mtime > prev.mtime && (
-		log_verbose && log('file changed: ' + path),
-		true
-	)
-)
-const file_watch = (path, callback) => (
-	fs.watchFile(path, (curr, prev) => {
-		if (file_compare(curr, prev, path)) {
-			fs.unwatchFile(path);
-			callback();
-		}
-	})
-)
+const file_watch_once = (path, callback) => {
+	const watcher = fs_watch(path, WATCH_OPTIONS, () => (
+		watcher.close(),
+		log_verbose && log('file updated: ' + path),
+		callback()
+	));
+};
 const file_keep_new = async (path, callback) => {
 	try {
 		const data = await fsp.readFile(path, 'utf8');
 		if (log_verbose) log('load file: ' + path);
 		await callback(data);
-		fs.watchFile(path, async (curr, prev) => {
-			if (file_compare(curr, prev, path)) {
-				await callback(
-					await fsp.readFile(path, 'utf8').catch(() => null)
-				);
-			}
-		});
 	}
 	catch (err) {
 		await callback(null);
+		return null;
 	}
+
+	let timeout = 0;
+	return fs_watch(path, WATCH_OPTIONS, () => (
+		clearTimeout(timeout),
+		timeout = setTimeout(() => (
+			log_verbose && log('file updated: ' + path),
+			fsp.readFile(path, 'utf8')
+				.catch(() => null)
+				.then(callback)
+		), 50)
+	));
 }
 
 let log_history = rtjscomp.log_history = [];
@@ -510,7 +539,7 @@ const request_handle = async (request, response, https) => {
 			if (file_stat.isDirectory()) throw 403;
 
 			if (file_dyn_enabled) { // compile file
-				const file_content = fs.readFileSync(path_real, 'utf8');
+				const file_content = await fsp.readFile(path_real, 'utf8');
 				try {
 					if (file_content.includes('\r')) {
 						throw 'illegal line break, must be unix';
@@ -520,7 +549,7 @@ const request_handle = async (request, response, https) => {
 					}
 					const file_content_length = file_content.length;
 
-					let code = `async (input,output,request,response,require,custom_import)=>{const log=a=>rtjscomp.log(${
+					let code = `const log=a=>rtjscomp.log(${
 						JSON.stringify(path + ': ')
 					}+a);`;
 
@@ -596,7 +625,15 @@ const request_handle = async (request, response, https) => {
 					}
 
 					try {
-						file_function = (0, eval)(code += '}');
+						file_function = new AsyncFunction(
+							'input',
+							'output',
+							'request',
+							'response',
+							'require',
+							'custom_import',
+							code
+						);
 					}
 					catch (err) {
 						throw err.message;
@@ -608,9 +645,9 @@ const request_handle = async (request, response, https) => {
 				}
 
 				file_cache_functions.set(path, file_function);
-				file_watch(path_real, () => {
-					file_cache_functions.delete(path);
-				});
+				file_watch_once(path_real, () => (
+					file_cache_functions.delete(path)
+				));
 			}
 		}
 
