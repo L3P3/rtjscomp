@@ -11,13 +11,13 @@ easy to use http server that allows for using javascript just as php was used ba
 go into the directory where you want to have your project and run
 
 ```console
-$ npx rtjscomp
+$ npx --yes rtjscomp@latest
 ```
 
 or in case you prefer [bun](https://bun.sh):
 
 ```console
-$ bunx rtjscomp
+$ bunx --bun rtjscomp@latest
 ```
 
 and now http://localhost:8080 offers a greeting!
