@@ -422,22 +422,23 @@ const request_handle = async (request, response, https) => {
 	try {
 		const request_url_parsed = url.parse(request.url, false);
 
-		let path = request_url_parsed.pathname || '';
+		let path = request_url_parsed.pathname || '/';
+		if (
+			path.charCodeAt(0) !== 47 ||
+			path.includes('//')
+		) throw 404;
+		if (path.length > 1 && path.endsWith('/')) {
+			response.setHeader('Location', path.slice(0, -1));
+			throw 301;
+		}
+		path = path.slice(1);
 
 		// ignore (timeout) many hack attempts
-		if (path.includes('php') || path.includes('sql')) return;
-
-		// remove leading/trailing /
-		while (path.charCodeAt(0) === 47) {
-			path = path.substring(1);
-		}
-		while (path.charCodeAt(path.length - 1) === 47) {
-			path = path.substring(0, path.length - 1);
-		}
-
-		if (path.includes('..') || path.includes('~')) throw 403;
-
-		if (file_blocks.has(path)) return;
+		if (
+			path.includes('php') ||
+			path.includes('sql') ||
+			file_blocks.has(path)
+		) return;
 
 		response.setHeader('Server', 'l3p3 rtjscomp v' + VERSION);
 		response.setHeader('Access-Control-Allow-Origin', '*');
@@ -463,11 +464,18 @@ const request_handle = async (request, response, https) => {
 					const params = {};
 					for (let i = 0; i < template_length; ++i) {
 						if (template[i].charCodeAt(0) === 42) {
-							if (template[i].length > 1) params[template[i].substr(1)] = path_split[i];
+							if (template[i].length > 1) {
+								params[template[i].slice(1)] = path_split[i];
+							}
 						}
-						else if (template[i] !== path_split[i]) continue template;
+						else if (template[i] !== path_split[i]) {
+							continue template;
+						}
 					}
-					response.setHeader('Content-Location', path = template_pair[1]);
+					response.setHeader(
+						'Content-Location',
+						path = template_pair[1]
+					);
 					path_params = params;
 					break;
 				}
@@ -475,9 +483,13 @@ const request_handle = async (request, response, https) => {
 		}
 
 		const file_type_index = path.lastIndexOf('.');
-		// no type ending -> dir?
-		if (file_type_index <= path.lastIndexOf('/')) throw 404;
-		const file_type = path.substring(
+		if (
+			path.includes('..') ||
+			path.includes('~') ||
+			// no type ending -> dir?
+			file_type_index <= path.lastIndexOf('/')
+		) throw 404;
+		const file_type = path.slice(
 			file_type_index + 1
 		).toLowerCase();
 
@@ -575,7 +587,7 @@ const request_handle = async (request, response, https) => {
 								if (file_content.charCodeAt(index_start) !== 61) {
 									code += (
 										file_content
-											.substring(
+											.slice(
 												index_start,
 												index_end
 											)
@@ -586,7 +598,7 @@ const request_handle = async (request, response, https) => {
 								else { // `<?=`?
 									code += `output.write(''+(${
 										file_content
-											.substring(
+											.slice(
 												++index_start,
 												index_end
 											)
@@ -617,7 +629,7 @@ const request_handle = async (request, response, https) => {
 							if (index_start < index_end) {
 								code += `output.write(${
 									JSON.stringify(
-										file_content.substring(index_start, index_end)
+										file_content.slice(index_start, index_end)
 									)
 								});`;
 							}
@@ -667,11 +679,11 @@ const request_handle = async (request, response, https) => {
 				if (index_equ > 0) {
 					file_function_input[
 						cookie
-							.substring(0, index_equ)
+							.slice(0, index_equ)
 							.trimRight()
 					] = decodeURI(
 						cookie
-							.substr(index_equ + 1)
+							.slice(index_equ + 1)
 							.trimLeft()
 					);
 				}
@@ -766,7 +778,7 @@ const request_handle = async (request, response, https) => {
 						.map(e => e[0] === 'password' ? [e[0], '***'] : e)
 						.map(e => e[0] === 'file' ? [e[0], '...'] : e)
 						.map(e => (typeof e[1] === 'object' && !e[1].length) ? [e[0], Object.keys(e[1]).slice(0, 20)] : e)
-						.map(e => (e[0] !== 'user_agent' && typeof e[1] === 'string' && e[1].length > 20) ? [e[0], e[1].substr(0, 20) + '...'] : e)
+						.map(e => (e[0] !== 'user_agent' && typeof e[1] === 'string' && e[1].length > 20) ? [e[0], e[1].slice(0, 20) + '...'] : e)
 				)
 			]);
 
