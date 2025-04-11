@@ -939,12 +939,13 @@ file_keep_new(PATH_CONFIG + 'services.txt', data => (
 ));
 
 await Promise.all([
-	file_keep_new(PATH_CONFIG + 'init.js', data => {
+	file_keep_new(PATH_CONFIG + 'init.js', async data => {
 		if (!data) return;
 		log('[deprecated] run global init script');
 		try {
-			var require = custom_require;
-			(0, eval)(data);
+			await (
+				new AsyncFunction('require', data)
+			)(custom_require);
 		}
 		catch (err) {
 			log('[error] init.js: ' + err.message);
