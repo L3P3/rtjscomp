@@ -974,7 +974,7 @@ await Promise.all([
 				}
 			}
 			else {
-				path_aliases_reverse.set(value, key);
+				path_aliases_reverse.set(value, '/' + key);
 			}
 		}
 	}),
