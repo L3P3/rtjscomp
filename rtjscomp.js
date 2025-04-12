@@ -42,6 +42,7 @@ const file_privates = new Set;
 const file_blocks = new Set;
 /// any path -> file
 const path_aliases = new Map;
+const path_aliases_reverse = new Map;
 const path_aliases_templates = new Map;
 const services = new Set;
 /// compiled file handlers
@@ -446,39 +447,39 @@ const request_handle = async (request, response, https) => {
 		let path_params = null;
 		let request_body_promise = null;
 
+		if (path_aliases_reverse.has(path)) {
+			response.setHeader('Location', path_aliases_reverse.get(path));
+			throw 301;
+		}
 		if (path_aliases.has(path)) {
-			response.setHeader(
-				'Content-Location',
-				path = path_aliases.get(path)
-			);
+			path = path_aliases.get(path)
 		}
 		else { // aliases with *
 			const path_split = path.split('/');
-			const templates = path_aliases_templates.get(path_split[0]);
-			if (templates) {
-				path_split.shift();
-				template: for (const template_pair of templates) {
-					const template = template_pair[0];
-					const template_length = template.length;
-					if (template_length !== path_split.length) continue;
-					const params = {};
-					for (let i = 0; i < template_length; ++i) {
-						if (template[i].charCodeAt(0) === 42) {
-							if (template[i].length > 1) {
-								params[template[i].slice(1)] = path_split[i];
-							}
-						}
-						else if (template[i] !== path_split[i]) {
-							continue template;
+			const templates = path_aliases_templates.get(
+				path_split.shift()
+			);
+			if (templates != null)
+			template: for (const template of templates) {
+				const template_path = template.path_split;
+				const template_path_length = template_path.length;
+				if (template_path_length !== path_split.length) continue;
+				const params = {};
+				for (let i = 0; i < template_path_length; ++i) {
+					if (template_path[i].charCodeAt(0) === 42) {
+						if (template_path[i].length > 1) {
+							params[
+								template_path[i].slice(1)
+							] = path_split[i];
 						}
 					}
-					response.setHeader(
-						'Content-Location',
-						path = template_pair[1]
-					);
-					path_params = params;
-					break;
+					else if (template_path[i] !== path_split[i]) {
+						continue template;
+					}
 				}
+				path = template.value;
+				path_params = params;
+				break;
 			}
 		}
 
@@ -504,11 +505,9 @@ const request_handle = async (request, response, https) => {
 			!file_raws.has(path)
 		);
 
-		if (file_dyn_enabled) {
-			if (
-				request_method !== 'GET' &&
-				'content-length' in request_headers
-			) {
+		if (request_method !== 'GET') {
+			if (!file_dyn_enabled) throw 405;
+			if ('content-length' in request_headers) {
 				request_body_promise = new Promise(resolve => {
 					const request_body_chunks = [];
 					request.on('data', chunk => {
@@ -520,9 +519,6 @@ const request_handle = async (request, response, https) => {
 					});
 				});
 			}
-		}
-		else if (request_method !== 'GET') {
-			throw 400;
 		}
 
 		let file_function = null;
@@ -959,20 +955,26 @@ await Promise.all([
 	}),
 	file_keep_new(PATH_CONFIG + 'path_aliases.txt', data => {
 		map_generate_equ(path_aliases, data);
+		path_aliases_reverse.clear();
 		path_aliases_templates.clear();
 		for (const [key, value] of path_aliases.entries()) {
-			const star_index = key.indexOf('*');
-			if (star_index < 0) continue;
-			path_aliases.delete(key);
-			const template = key.split('/');
-			const first = template.shift();
-			if (path_aliases_templates.has(first)) {
-				path_aliases_templates.get(first).push([template, value]);
+			if (key.includes('*')) {
+				path_aliases.delete(key);
+				const path_split = key.split('/');
+				const first = path_split.shift();
+				if (path_aliases_templates.has(first)) {
+					path_aliases_templates.get(first).push(
+						{path_split, value}
+					);
+				}
+				else {
+					path_aliases_templates.set(first, [
+						{path_split, value},
+					]);
+				}
 			}
 			else {
-				path_aliases_templates.set(first, [
-					[template, value],
-				]);
+				path_aliases_reverse.set(value, key);
 			}
 		}
 	}),
