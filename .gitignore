@@ -1,4 +1,6 @@
-node_modules/
-config/ssl/
+config/
 data/
+node_modules/
+package-lock.json
+rtjscomp.json
 spam.csv

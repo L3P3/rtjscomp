@@ -1,4 +1,16 @@
-<?
-const zahl = Number(input.zahl || 42);
-?><h1>Hallo, Welt!</h1>
-<p>Zahl: <?= zahl ?></p>
+<!DOCTYPE html><?
+
+const code = Number(input.code || 42);
+// this is not php but javascript!!!!!!!!!!!!!
+// but for better syntax highlighting, set ide language to php.
+// open your local website and look into its source code. this script will be gone.
+
+?>
+<html>
+	<body>
+		<h1>Hello, World!</h1>
+		<p>Current reason: <?= code ?></p>
+		<p><a href="/?code=<?= code + 1 ?>">One more</a></p>
+		<p>See <a href="https://github.com/L3P3/rtjscomp">the readme</a>!</p>
+	</body>
+</html>

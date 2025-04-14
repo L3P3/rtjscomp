@@ -1,5 +1,0 @@
-# the part before the : will be replaced by the part after it
-# insert * to have parameters extracted from the path
-
-:index.html
-zahl/*zahl:index.html

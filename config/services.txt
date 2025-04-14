@@ -1,2 +1,0 @@
-# list paths to service.js files in your public directory
-# example "counter" to enable public/counter.service.js 

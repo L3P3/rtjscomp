@@ -7,52 +7,102 @@
 
 (async () => {
 
-const http = require('http');
-const url = require('url');
+// node libs
 const fs = require('fs');
 const fsp = require('fs/promises');
-const multipart_parse = require('parse-multipart-data').parse;
+const http = require('http');
+const url = require('url');
 const zlib = require('zlib');
-const request_ip_get = require('ipware')().get_ip;
-const querystring_parse = require('querystring').decode;
-const resolve_options = {paths: [require('path').resolve()]};
 
-const VERSION = require('./package.json').version;
-const PATH_PUBLIC = 'public/';
-const PATH_CONFIG = 'config/';
-const PATH_DATA = 'data/';
-const GZIP_OPTIONS = {level: 9};
-const WATCH_OPTIONS = {persistent: true, interval: 1000};
+// external libs
+const multipart_parse = require('parse-multipart-data').parse;
+const querystring_parse = require('querystring').decode;
+const request_ip_get = require('ipware')().get_ip;
+
+// constants
 const AGENT_CHECK_BOT = /bot|googlebot|crawler|spider|robot|crawling|favicon/i;
 const AGENT_CHECK_MOBIL = /(android|bb\d+|meego).+mobile|avantgo|bada\/|blackberry|blazer|compal|elaine|fennec|hiptop|iemobile|ip(hone|od)|iris|kindle|lge |maemo|midp|mmp|mobile.+firefox|netfront|opera m(ob|in)i|palm( os)?|phone|p(ixi|re)\/|plucker|pocket|psp|series(4|6)0|symbian|treo|up\.(browser|link)|vodafone|wap|windows ce|xda|xiino|android|ipad|playbook|silk/i;
+const GZIP_OPTIONS = {level: 9};
 const HTTP_LIST_REG = /,\s*/;
 const IMPORT_REG = /import\(/g;
+const IS_BUN = typeof Bun !== 'undefined';
+const PATH_CONFIG = 'config/';
+const PATH_DATA = 'data/';
+const PATH_PUBLIC = 'public/';
+const RESOLVE_OPTIONS = {paths: [require('path').resolve()]};
+const VERSION = require('./package.json').version;
+const WATCH_OPTIONS = {persistent: true, interval: 1000};
 
+// config
 let log_verbose = process.argv.includes('-v');
 let port_http = 0;
 let port_https = 0;
-const file_type_mimes = new Map;
-const file_type_dyns = new Set;
-const file_type_nocompress = new Set;
-/// forced static files
-const file_raws = new Set;
-/// hidden files
-const file_privates = new Set;
-/// files where requests should be totally ignored
-const file_blocks = new Set;
 /// any path -> file
-const path_aliases = new Map;
-const path_aliases_reverse = new Map;
+const path_aliases = new Map([
+	['', 'index.html'],
+]);
+const path_aliases_reverse = new Map([
+	['index.html', '/'],
+]);
 const path_aliases_templates = new Map;
-const services = new Set;
+/// files where requests should be totally ignored
+const path_ghosts = new Set;
+/// hidden files
+const path_hiddens = new Set;
+/// forced static files
+const path_statics = new Set;
+const type_dynamics = new Set([
+	'events',
+	'html',
+	'json',
+	'txt',
+]);
+const type_mimes = new Map([
+	['apk', 'application/zip'],
+	['bpg', 'image/bpg'],
+	['css', 'text/css; charset=utf-8'],
+	['events', 'text/event-stream'],
+	['flac', 'audio/flac'],
+	['gz', 'application/gzip'],
+	['hta', 'application/hta'],
+	['html', 'text/html; charset=utf-8'],
+	['ico', 'image/x-icon'],
+	['jpg', 'image/jpeg'],
+	['js', 'text/javascript; charset=utf-8'],
+	['json', 'application/json; charset=utf-8'],
+	['mid', 'audio/midi'],
+	['mp3', 'audio/mpeg3'],
+	['pdf', 'application/pdf'],
+	['png', 'image/png'],
+	['rss', 'application/rss+xml; charset=utf-8'],
+	['txt', 'text/plain; charset=utf-8'],
+	['xml', 'application/xml; charset=utf-8'],
+	['xz', 'application/x-xz'],
+	['zip', 'application/zip'],
+]);
+const type_raws = new Set([
+	'apk',
+	'bpg',
+	'flac',
+	'gz',
+	'jpg',
+	'mp3',
+	'pdf',
+	'png',
+	'xz',
+	'zip',
+]);
+
 /// compiled file handlers
 const file_cache_functions = new Map;
+
 const actions = {};
 const rtjscomp = global.rtjscomp = {
 	actions,
 	version: VERSION,
 };
 
+// polyfills
 if (!Object.fromEntries) {
 	Object.fromEntries = entries => {
 		const object = {};
@@ -63,7 +113,7 @@ if (!Object.fromEntries) {
 
 // workaround for bun: https://github.com/oven-sh/bun/issues/18919
 let fs_watch = fs.watch;
-if (typeof Bun !== 'undefined') {
+if (IS_BUN) {
 	const fs_watch_original = fs_watch;
 	const watch_callbacks = new Map;
 	fs_watch = (path, options, callback) => {
@@ -88,7 +138,7 @@ if (typeof Bun !== 'undefined') {
 global.globals = rtjscomp;
 global.actions = rtjscomp.actions;
 global.data_load = name => {
-	log('[deprecated] synchronous load: ' + PATH_DATA + name);
+	log('[deprecated] synchronous load file: ' + PATH_DATA + name);
 	try {
 		return fs.readFileSync(PATH_DATA + name, 'utf8');
 	}
@@ -97,7 +147,7 @@ global.data_load = name => {
 	}
 }
 global.data_save = (name, data) => (
-	log('[deprecated] synchronous save: ' + PATH_DATA + name),
+	log('[deprecated] synchronous save file: ' + PATH_DATA + name),
 	fs.writeFileSync(PATH_DATA + name, data, 'utf8')
 )
 global.number_check_int = number => (
@@ -108,7 +158,7 @@ global.number_check_uint = number => (
 )
 
 rtjscomp.data_load = async name => {
-	if (log_verbose) log('load: ' + PATH_DATA + name);
+	if (log_verbose) log('load file: ' + PATH_DATA + name);
 	const data = await fsp.readFile(PATH_DATA + name, 'utf8').catch(() => null);
 	return name.endsWith('.json') ? JSON.parse(data || null) : data;
 }
@@ -122,7 +172,7 @@ rtjscomp.data_load_watch = (name, callback) => (
 	))
 )
 rtjscomp.data_save = (name, data) => (
-	log_verbose && log('save: ' + PATH_DATA + name),
+	log_verbose && log('save file: ' + PATH_DATA + name),
 	fsp.writeFile(
 		PATH_DATA + name,
 		name.endsWith('.json') ? JSON.stringify(data) : data,
@@ -137,8 +187,8 @@ const custom_require = path => {
 	let result = custom_require_cache.get(path);
 	if (result != null) return result;
 
-	log_verbose && log('require: ' + path);
-	const path_real = require.resolve(path, resolve_options);
+	log_verbose && log('require module: ' + path);
+	const path_real = require.resolve(path, RESOLVE_OPTIONS);
 	custom_require_paths.add(path_real);
 	custom_require_cache.set(
 		path,
@@ -150,11 +200,11 @@ const custom_import = async path => {
 	let result = custom_import_cache.get(path);
 	if (result != null) return result;
 
-	log_verbose && log('import: ' + path);
+	log_verbose && log('import module: ' + path);
 	custom_import_cache.set(
 		path,
 		result = await import(
-			'file://' + require.resolve(path, resolve_options)
+			'file://' + require.resolve(path, RESOLVE_OPTIONS)
 		)
 	);
 	return result;
@@ -170,14 +220,17 @@ const AsyncFunction = custom_import.constructor;
 
 const services_active = new Map;
 const services_loading = new Set;
-const services_list_react = async () => {
+const services_list_react = async list => {
 	await Promise.all(
 		Array.from(services_active.entries())
-			.filter(([path, _]) => !services.has(path))
+			.filter(([path, _]) => !list.includes(path))
 			.map(([_, service_object]) => service_stop(service_object, true))
 	);
-	for (const path of services)
-	if (!services_active.has(path)) {
+	for (const path of list)
+	if (
+		path.charCodeAt(0) !== 35 &&
+		!services_active.has(path)
+	) {
 		await service_start(path);
 	}
 }
@@ -272,7 +325,6 @@ const service_start_inner = async (path, service_object, file_content) => {
 	if (log_verbose) log('started service: ' + path);
 }
 const services_shutdown = () => (
-	log_verbose && log('shutdown services...'),
 	Promise.all(
 		Array.from(services_active.values())
 			.map(service_object => service_stop(service_object, true))
@@ -317,28 +369,6 @@ global.service_require_try = path => {
 	);
 }
 
-const map_generate_bol = (set, data) => {
-	set.clear();
-	for (const key of data.split('\n'))
-	if (
-		key.length > 0 &&
-		key.charCodeAt(0) !== 35
-	) {
-		set.add(key);
-	}
-}
-const map_generate_equ = (map, data) => {
-	map.clear();
-	for (const entry of data.split('\n'))
-	if (
-		entry.length > 0 &&
-		entry.charCodeAt(0) !== 35
-	) {
-		const equ = entry.split(':');
-		map.set(equ[0], equ[1] || '');
-	}
-}
-
 const file_watch_once = (path, callback) => {
 	const watcher = fs_watch(path, WATCH_OPTIONS, () => (
 		watcher.close(),
@@ -368,6 +398,75 @@ const file_keep_new = async (path, callback) => {
 		), 50)
 	));
 }
+
+const get_prop_uint = (obj, prop, fallback) => {
+	if (
+		obj === null ||
+		!(prop in obj)
+	) return fallback;
+	const value = obj[prop];
+	if (
+		typeof value !== 'number' ||
+		value < 0 ||
+		value % 1 > 0
+	) {
+		throw prop + ' must be positive integer';
+	}
+	delete obj[prop];
+	return value;
+}
+const get_prop_list = (obj, prop) => {
+	if (
+		obj === null ||
+		!(prop in obj)
+	) return null;
+	const value = obj[prop];
+	if (
+		typeof value !== 'object' ||
+		value.length == null ||
+		value.some(item => typeof item !== 'string')
+	) {
+		throw prop + ' must be array of strings';
+	}
+	delete obj[prop];
+	return value;
+}
+const get_prop_map = (obj, prop) => {
+	if (
+		obj === null ||
+		!(prop in obj)
+	) return null;
+	let value = obj[prop];
+	if (
+		typeof value !== 'object' ||
+		(
+			value = Object.entries(value)
+		).some(([_, item]) => typeof item !== 'string')
+	) {
+		throw prop + ' must be object of strings';
+	}
+	delete obj[prop];
+	return value;
+}
+const parse_old_list = data => (
+	data
+		.split('\n')
+		.filter(entry =>
+			entry.length > 0 &&
+			entry.charCodeAt(0) !== 35
+		)
+)
+const parse_old_map = data => (
+	Object.fromEntries(
+		data
+			.split('\n')
+			.filter(entry =>
+				entry.length > 0 &&
+				entry.charCodeAt(0) !== 35
+			)
+			.map(entry => entry.split(':'))
+	)
+)
 
 let log_history = rtjscomp.log_history = [];
 actions.log_clear = () => {
@@ -438,7 +537,7 @@ const request_handle = async (request, response, https) => {
 		if (
 			path.includes('php') ||
 			path.includes('sql') ||
-			file_blocks.has(path)
+			path_ghosts.has(path)
 		) return;
 
 		response.setHeader('Server', 'l3p3 rtjscomp v' + VERSION);
@@ -496,13 +595,13 @@ const request_handle = async (request, response, https) => {
 
 		let file_gz_enabled = (
 			'accept-encoding' in request_headers &&
-			!file_type_nocompress.has(file_type) &&
+			!type_raws.has(file_type) &&
 			request_headers['accept-encoding'].split(HTTP_LIST_REG).includes('gzip')
 		);
 
 		const file_dyn_enabled = (
-			file_type_dyns.has(file_type) &&
-			!file_raws.has(path)
+			type_dynamics.has(file_type) &&
+			!path_statics.has(path)
 		);
 
 		if (request_method !== 'GET') {
@@ -539,7 +638,7 @@ const request_handle = async (request, response, https) => {
 			}ic file: ${path_real}`);
 
 			if (
-				file_privates.has(path) ||
+				path_hiddens.has(path) ||
 				path.endsWith('.service.js')
 			) throw 403;
 			if (!fs.existsSync(path_real)) throw 404;
@@ -662,7 +761,7 @@ const request_handle = async (request, response, https) => {
 		response.statusCode = 200;
 		response.setHeader(
 			'Content-Type',
-			file_type_mimes.get(file_type) || file_type_mimes.get('txt')
+			type_mimes.get(file_type) || type_mimes.get('txt')
 		);
 
 		if (file_dyn_enabled) { // dynamic file
@@ -848,7 +947,10 @@ const request_handle = async (request, response, https) => {
 			err = 500;
 		}
 
-		if (err >= 400 && log_verbose) {
+		if (
+			err >= 500 ||
+			log_verbose && err >= 400
+		) {
 			log(`[error] request failed: ${err}; ${request_ip}; ${request.url}`);
 		}
 
@@ -862,20 +964,21 @@ const request_handle = async (request, response, https) => {
 
 let exiting = false;
 actions.halt = async () => {
+	if (log_verbose) log('stop all');
 	await Promise.all([
 		actions.http_stop && actions.http_stop(),
 		actions.https_stop && actions.https_stop(),
 		services_shutdown(),
 	]);
 	await actions.spam_save();
-	log('stopped everything');
+	log('stopped all');
 }
 actions.exit = async status => {
 	if (exiting) return;
 	exiting = true;
 	if (typeof status !== 'number') status = 0;
 	await actions.halt();
-	log('exiting...');
+	if (log_verbose) log('exit');
 	process.exit(status);
 }
 
@@ -898,25 +1001,43 @@ process.on('SIGINT', actions.exit);
 process.on('SIGUSR2', actions.exit);
 process.on('SIGTERM', actions.exit);
 
-log(`rtjscomp v${VERSION} in ${typeof Bun === 'undefined' ? 'node' : 'bun'} on ${process.platform}`);
+log(`rtjscomp v${
+	VERSION
+} in ${
+	IS_BUN ? 'bun' : 'node'
+} on ${
+	process.platform
+}`);
+
+await file_keep_new(PATH_CONFIG + 'init.js', async data => {
+	if (!data) return;
+	log('[deprecated] run global init script');
+	try {
+		await (
+			new AsyncFunction('require', data)
+		)(custom_require);
+	}
+	catch (err) {
+		log('[error] init.js: ' + err.message);
+	}
+});
 
 // initial
-await Promise.all([
-	fsp.stat(PATH_CONFIG).catch(_ => null),
-	fsp.stat(PATH_DATA).catch(_ => null),
-	fsp.stat(PATH_PUBLIC).catch(_ => null),
-]).then(([stat_config, stat_data, stat_public]) => {
-	if (!stat_config) {
-		log('create config template directory');
-		fs.mkdirSync(PATH_CONFIG);
-		fs.mkdirSync(PATH_CONFIG + 'ssl');
-		for (const file of 'file_type_dyns,file_type_mimes,file_type_nocompress,path_aliases,port_http,port_https,services'.split(',')) {
-			fs.copyFileSync(
-				__dirname + '/' + PATH_CONFIG + file + '.txt',
-				PATH_CONFIG + file + '.txt'
-			);
-		}
-	}
+{
+	const [
+		stat_data,
+		stat_public,
+		...files_config
+	] = await Promise.all([
+		fsp.stat(PATH_DATA).catch(_ => null),
+		fsp.stat(PATH_PUBLIC).catch(_ => null),
+		...(
+			'file_blocks,file_privates,file_raws,file_type_dyns,file_type_mimes,file_type_nocompress,path_aliases,port_http,port_https,services'
+			.split(',')
+			.map(name => fsp.readFile(PATH_CONFIG + name + '.txt', 'utf8').catch(_ => null))
+		),
+	]);
+
 	if (!stat_data) {
 		fs.mkdirSync(PATH_DATA);
 	}
@@ -927,79 +1048,74 @@ await Promise.all([
 			{recursive: true}
 		);
 	}
-});
+	if (
+		files_config.some(file => file !== null)
+	) {
+		const json = JSON.parse(
+			await fsp.readFile('rtjscomp.json', 'utf8').catch(_ => null)
+		) || {};
 
-file_keep_new(PATH_CONFIG + 'services.txt', data => (
-	map_generate_bol(services, data),
-	services_list_react()
-));
+		const [
+			old_file_blocks,
+			old_file_privates,
+			old_file_raws,
+			old_file_type_dyns,
+			old_file_type_mimes,
+			old_file_type_nocompress,
+			old_path_aliases,
+			old_port_http,
+			old_port_https,
+			old_services,
+		] = files_config;
 
-await Promise.all([
-	file_keep_new(PATH_CONFIG + 'init.js', async data => {
-		if (!data) return;
-		log('[deprecated] run global init script');
-		try {
-			await (
-				new AsyncFunction('require', data)
-			)(custom_require);
+		if (old_file_blocks) {
+			json['path_ghosts'] = parse_old_list(old_file_blocks);
 		}
-		catch (err) {
-			log('[error] init.js: ' + err.message);
+		if (old_file_privates) {
+			json['path_hiddens'] = parse_old_list(old_file_privates);
 		}
-	}),
-	file_keep_new(PATH_CONFIG + 'file_type_mimes.txt', data => {
-		map_generate_equ(file_type_mimes, data);
-		if (!file_type_mimes.has('txt')) {
-			file_type_mimes.set('txt', 'text/plain; charset=utf-8');
+		if (old_file_raws) {
+			json['path_statics'] = parse_old_list(old_file_raws);
 		}
-	}),
-	file_keep_new(PATH_CONFIG + 'path_aliases.txt', data => {
-		map_generate_equ(path_aliases, data);
-		path_aliases_reverse.clear();
-		path_aliases_templates.clear();
-		for (const [key, value] of path_aliases.entries()) {
-			if (key.includes('*')) {
-				path_aliases.delete(key);
-				const path_split = key.split('/');
-				const first = path_split.shift();
-				if (path_aliases_templates.has(first)) {
-					path_aliases_templates.get(first).push(
-						{path_split, value}
-					);
-				}
-				else {
-					path_aliases_templates.set(first, [
-						{path_split, value},
-					]);
-				}
-			}
-			else {
-				path_aliases_reverse.set(value, '/' + key);
+		if (old_file_type_dyns) {
+			json['type_dynamics'] = parse_old_list(old_file_type_dyns);
+		}
+		if (old_file_type_mimes) {
+			json['type_mimes'] = parse_old_map(old_file_type_mimes);
+		}
+		if (old_file_type_nocompress) {
+			json['type_raws'] = parse_old_list(old_file_type_nocompress);
+		}
+		if (old_path_aliases) {
+			json['path_aliases'] = parse_old_map(old_path_aliases);
+		}
+		if (old_port_http) {
+			const number = parseInt(old_port_http);
+			if (!isNaN(number)) {
+				json['port_http'] = number;
 			}
 		}
-	}),
-	file_keep_new(PATH_CONFIG + 'file_type_dyns.txt', data => {
-		map_generate_bol(file_type_dyns, data);
-	}),
-	file_keep_new(PATH_CONFIG + 'file_type_nocompress.txt', data => {
-		map_generate_bol(file_type_nocompress, data);
-	}),
-	file_keep_new(PATH_CONFIG + 'file_raws.txt', data => {
-		if (!data) return;
-		map_generate_bol(file_raws, data);
-	}),
-	file_keep_new(PATH_CONFIG + 'file_privates.txt', data => {
-		if (!data) return;
-		map_generate_bol(file_privates, data);
-	}),
-	file_keep_new(PATH_CONFIG + 'file_blocks.txt', data => {
-		if (!data) return;
-		map_generate_bol(file_blocks, data);
-	}),
-]);
+		if (old_port_https) {
+			const number = parseInt(old_port_https);
+			if (!isNaN(number)) {
+				json['port_https'] = number;
+			}
+		}
+		if (old_services) {
+			json['services'] = old_services.split('\n').filter(path => path.length > 0);
+		}
 
+		await fsp.writeFile(
+			'rtjscomp.json',
+			JSON.stringify(json, null, 2),
+			'utf8'
+		);
+		log('[deprecated] config files found, rtjscomp.json written, please delete config files');
+	}
+}
+
+// http(s)
 let connections_count = 0;
-let http_status = false;
 let http_status_target = false;
 let http_listened_resolve = null;
 const http_connections = new Map;
@@ -1020,14 +1136,12 @@ server_http.on('connection', connection => {
 
 actions.http_start = async () => {
 	await actions.http_stop();
+	if (!port_http) return;
 	http_status_target = true;
 	log('start http: http://localhost:' + port_http);
 	await new Promise(resolve => server_http.listen(port_http, http_listened_resolve = resolve));
 	if (http_listened_resolve) http_listened_resolve = null;
-	else{
-		http_status = true;
-		if (log_verbose) log('started http');
-	}
+	else if (log_verbose) log('started http');
 }
 actions.http_stop = async () => {
 	if (!http_status_target) return;
@@ -1036,7 +1150,6 @@ actions.http_stop = async () => {
 	const kill_timeout = setTimeout(actions.http_kill, 5e3);
 	await new Promise(resolve => server_http.close(resolve));
 	clearTimeout(kill_timeout);
-	http_status = false;
 	if (log_verbose) log('stopped http');
 }
 actions.http_kill = async () => {
@@ -1050,24 +1163,9 @@ actions.http_kill = async () => {
 	http_connections.clear();
 }
 
-file_keep_new(PATH_CONFIG + 'port_http.txt', data => {
-	if (
-		!data ||
-		isNaN(data = Number(data)) ||
-		!number_check_uint(data)
-	) {
-		log('[error] http: invalid port number');
-	}
-	else if (data !== port_http) {
-		port_http = data;
-		actions.http_start();
-	}
-});
-
 try {
 	const https_key = fs.readFileSync(PATH_CONFIG + 'ssl/domain.key');
 	const https_cert = fs.readFileSync(PATH_CONFIG + 'ssl/chained.pem');
-	let https_status = false;
 	let https_status_target = false;
 	let https_listened_resolve = null;
 	const https_connections = new Map;
@@ -1089,14 +1187,12 @@ try {
 
 	actions.https_start = async () => {
 		await actions.https_stop();
+		if (!port_https) return;
 		https_status_target = true;
 		log('start https: https://localhost:' + port_https);
 		await new Promise(resolve => server_https.listen(port_https, https_listened_resolve = resolve));
 		if (https_listened_resolve) https_listened_resolve = null;
-		else{
-			https_status = true;
-			if (log_verbose) log('started https');
-		}
+		else if (log_verbose) log('started https');
 	}
 	actions.https_stop = async () => {
 		if (!https_status_target) return;
@@ -1105,7 +1201,6 @@ try {
 		const kill_timeout = setTimeout(actions.https_kill, 5000);
 		await new Promise(resolve => server_https.close(resolve));
 		clearTimeout(kill_timeout);
-		https_status = false;
 		if (log_verbose) log('stopped https');
 	}
 	actions.https_kill = async () => {
@@ -1117,23 +1212,130 @@ try {
 		if (log_verbose) log('killed https');
 		https_connections.clear();
 	}
-
-	file_keep_new(PATH_CONFIG + 'port_https.txt', data => {
-		if (
-			!data ||
-			isNaN(data = Number(data)) ||
-			!number_check_uint(data)
-		) {
-			log('[error] https: invalid port number');
-		}
-		else if (data !== port_https) {
-			port_https = data;
-			actions.https_start();
-		}
-	});
 }
 catch (err) {
 	if (log_verbose) log('https: no cert, disabled');
 }
+
+// config
+await file_keep_new('rtjscomp.json', data => {
+	try {
+		data = JSON.parse(data);
+		if (typeof data !== 'object') {
+			throw 'must contain {}';
+		}
+
+		const path_aliases_new = get_prop_map(data, 'path_aliases');
+		const path_ghosts_new = get_prop_list(data, 'path_ghosts');
+		const path_hiddens_new = get_prop_list(data, 'path_hiddens');
+		const path_statics_new = get_prop_list(data, 'path_statics');
+		const port_http_new = get_prop_uint(data, 'port_http', 8080);
+		const port_https_new = get_prop_uint(data, 'port_https', 0);
+		const services_new = get_prop_list(data, 'services') || [];
+		const type_dynamics_new = get_prop_list(data, 'type_dynamics');
+		const type_mimes_new = get_prop_map(data, 'type_mimes');
+		const type_raws_new = get_prop_list(data, 'type_raws');
+
+		if (data) {
+			const keys_left = Object.keys(data);
+			if (keys_left.length > 0) {
+				throw 'unknown: ' + keys_left.join(', ');
+			}
+		}
+
+		if (path_ghosts_new) {
+			path_ghosts.clear();
+			for (const key of path_ghosts_new) {
+				path_ghosts.add(key);
+			}
+		}
+		if (path_hiddens_new) {
+			path_hiddens.clear();
+			for (const key of path_hiddens_new) {
+				path_hiddens.add(key);
+			}
+		}
+		if (path_statics_new) {
+			path_statics.clear();
+			for (const key of path_statics_new) {
+				path_statics.add(key);
+			}
+		}
+		if (path_aliases_new) {
+			path_aliases.clear();
+			path_aliases_reverse.clear();
+			path_aliases_templates.clear();
+			for (const [key, value] of path_aliases_new) {
+				if (key.includes('*')) {
+					const path_split = key.split('/');
+					const first = path_split.shift();
+					if (path_aliases_templates.has(first)) {
+						path_aliases_templates.get(first).push(
+							{path_split, value}
+						);
+					}
+					else {
+						path_aliases_templates.set(first, [
+							{path_split, value},
+						]);
+					}
+				}
+				else {
+					path_aliases.set(key, value);
+					path_aliases_reverse.set(value, '/' + key);
+				}
+			}
+		}
+		if (type_dynamics_new) {
+			type_dynamics.clear();
+			for (const key of type_dynamics_new) {
+				type_dynamics.add(key);
+			}
+		}
+		if (type_mimes_new) {
+			for (const [key, value] of type_mimes_new) {
+				type_mimes.set(key, value);
+			}
+		}
+		if (type_raws_new) {
+			type_raws.clear();
+			for (const key of type_raws_new) {
+				type_raws.add(key);
+			}
+		}
+
+		const promises = [
+			services_list_react(services_new),
+		];
+
+		if (port_http_new !== port_http) {
+			port_http = port_http_new;
+			promises.push(
+				port_http_new > 0
+				?	actions.http_start()
+				:	actions.http_stop()
+			);
+		}
+
+		if (
+			actions.https_stop != null &&
+			port_https_new !== port_https
+		) {
+			port_https = port_https_new;
+			promises.push(
+				port_https_new > 0
+				?	actions.https_start()
+				:	actions.https_stop()
+			);
+		}
+
+		return Promise.all(promises);
+	}
+	catch (err) {
+		log('[error] rtjscomp.json: ' + (err.message || err));
+	}
+});
+
+if (log_verbose) log('started all');
 
 })();

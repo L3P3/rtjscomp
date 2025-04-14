@@ -1,7 +1,0 @@
-# put file types here that should be compiled
-# <? ... ?> will only be executed in those!
-
-html
-txt
-json
-events
