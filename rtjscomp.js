@@ -528,8 +528,12 @@ const request_handle = async (request, response, https) => {
 			path.includes('//')
 		) throw 404;
 		if (path.length > 1 && path.endsWith('/')) {
-			response.setHeader('Location', path.slice(0, -1));
-			throw 301;
+			path = path.slice(0, -1);
+			// is file with extension?
+			if (path.lastIndexOf('/') < path.lastIndexOf('.')) {
+				response.setHeader('Location', path);
+				throw 301;
+			}
 		}
 		path = path.slice(1);
 
@@ -1107,7 +1111,7 @@ await file_keep_new(PATH_CONFIG + 'init.js', async data => {
 
 		await fsp.writeFile(
 			'rtjscomp.json',
-			JSON.stringify(json, null, 2),
+			JSON.stringify(json, null, '\t') + '\n',
 			'utf8'
 		);
 		log('[deprecated] config files found, rtjscomp.json written, please delete config files');
@@ -1282,7 +1286,13 @@ await file_keep_new('rtjscomp.json', data => {
 				}
 				else {
 					path_aliases.set(key, value);
-					path_aliases_reverse.set(value, '/' + key);
+					const existing = path_aliases_reverse.get(value);
+					if (
+						existing == null ||
+						existing.length - 1 > value.length
+					) {
+						path_aliases_reverse.set(value, '/' + key);
+					}
 				}
 			}
 		}
