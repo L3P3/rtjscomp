@@ -24,19 +24,30 @@ const AGENT_CHECK_BOT = /bot|googlebot|crawler|spider|robot|crawling|favicon/i;
 const AGENT_CHECK_MOBIL = /(android|bb\d+|meego).+mobile|avantgo|bada\/|blackberry|blazer|compal|elaine|fennec|hiptop|iemobile|ip(hone|od)|iris|kindle|lge |maemo|midp|mmp|mobile.+firefox|netfront|opera m(ob|in)i|palm( os)?|phone|p(ixi|re)\/|plucker|pocket|psp|series(4|6)0|symbian|treo|up\.(browser|link)|vodafone|wap|windows ce|xda|xiino|android|ipad|playbook|silk/i;
 const GZIP_OPTIONS = {level: 9};
 const HTTP_LIST_REG = /,\s*/;
-const IMPORT_REG = /import\(/g;
+const IMPORT_REG = /\bimport\(/g;
 const IS_BUN = typeof Bun !== 'undefined';
+const LINENUMBER_REG = /:([0-9]+)[\):]/;
 const PATH_CONFIG = 'config/';
 const PATH_DATA = 'data/';
 const PATH_PUBLIC = 'public/';
 const RESOLVE_OPTIONS = {paths: [require('path').resolve()]};
+const SERVICE_REQUIRE_REG = /\bservice_require\(([^)]*)\)/g;
+const SERVICE_STATUS_PENDING = 0; // just added to list
+const SERVICE_STATUS_WAITING = 1; // waiting for deps
+const SERVICE_STATUS_STARTING = 2; // running startup
+const SERVICE_STATUS_ACTIVE = 3; // ready for use
+const SERVICE_STATUS_STOPPING = 4; // running stop fn
+const SERVICE_STATUS_FAILED = 5; // waiting for fix
 const VERSION = require('./package.json').version;
 const WATCH_OPTIONS = {persistent: true, interval: 1000};
 
 // config
-let log_verbose = process.argv.includes('-v');
+const log_verbose_flag = process.argv.includes('-v');
+let log_verbose = log_verbose_flag;
 let port_http = 0;
 let port_https = 0;
+let gz_enabled = true;
+let exiting = false;
 /// any path -> file
 const path_aliases = new Map([
 	['', 'index.html'],
@@ -108,7 +119,7 @@ if (!Object.fromEntries) {
 		const object = {};
 		for (const entry of entries) object[entry[0]] = entry[1];
 		return object;
-	};
+	}
 }
 
 // workaround for bun: https://github.com/oven-sh/bun/issues/18919
@@ -160,7 +171,11 @@ global.number_check_uint = number => (
 rtjscomp.data_load = async name => {
 	if (log_verbose) log('load file: ' + PATH_DATA + name);
 	const data = await fsp.readFile(PATH_DATA + name, 'utf8').catch(() => null);
-	return name.endsWith('.json') ? JSON.parse(data || null) : data;
+	return (
+		name.endsWith('.json')
+		?	JSON.parse(data || null)
+		:	data
+	);
 }
 rtjscomp.data_load_watch = (name, callback) => (
 	file_keep_new(PATH_DATA + name, data => (
@@ -175,10 +190,32 @@ rtjscomp.data_save = (name, data) => (
 	log_verbose && log('save file: ' + PATH_DATA + name),
 	fsp.writeFile(
 		PATH_DATA + name,
-		name.endsWith('.json') ? JSON.stringify(data) : data,
+		(
+			name.endsWith('.json')
+			?	JSON.stringify(data)
+			:	data
+		),
 		'utf8'
 	)
 )
+
+/**
+	hack to guess the line number of an error
+*/
+const linenumber_try = err => {
+	try {
+		return `:${
+			err.stack
+				.split('\n', 2)[1]
+				.split(',').pop()
+				.match(LINENUMBER_REG)[1]
+			- 2
+		}`;
+	}
+	catch (_) {
+		return '';
+	}
+};
 
 const custom_require_paths = new Set;
 const custom_require_cache = new Map;
@@ -218,153 +255,348 @@ actions.module_cache_clear = () => {
 }
 const AsyncFunction = custom_import.constructor;
 
-const services_active = new Map;
-const services_loading = new Set;
+const services = new Map;
+let services_loaded_promise = null;
+let services_loaded_promise_resolve = null;
+/**
+	stop/start services according to list
+*/
 const services_list_react = async list => {
+	// stop all services not in list
 	await Promise.all(
-		Array.from(services_active.entries())
-			.filter(([path, _]) => !list.includes(path))
-			.map(([_, service_object]) => service_stop(service_object, true))
+		[...services.values()]
+			.filter(service_object => (
+				service_object.status < SERVICE_STATUS_STOPPING &&
+				!list.includes(service_object.path)
+			))
+			// so they will not be restarted
+			.map(service_object => (
+				service_object.dependencies = null,
+				service_object
+			))
+			.map(service_stop)
 	);
-	for (const path of list)
-	if (
-		path.charCodeAt(0) !== 35 &&
-		!services_active.has(path)
-	) {
-		await service_start(path);
-	}
-}
-const service_start = async path => {
-	const service_object = {
-		content: null,
-		handler_stop: null,
-		path,
-		stopped: false,
-		watcher: null,
-	};
-
-	service_object.watcher = await file_keep_new(
-		PATH_PUBLIC + path + '.service.js',
-		async file_content => {
-			if (file_content === null) {
-				log('[error] service file not found: ' + path);
-				return service_stop(service_object, true);
-			}
-			if (services_loading.size > 0) {
-				await Promise.all(Array.from(services_loading));
-			}
-			const start_promise = service_start_inner(path, service_object, file_content);
-			services_loading.add(start_promise);
-			await start_promise;
-			services_loading.delete(start_promise);
+	// start all services in list
+	const start_queue = [];
+	for (const path of list) {
+		let service_object = services.get(path);
+		if (service_object == null) {
+			services.set(path, service_object = {
+				content: null,
+				dependencies: null,
+				dependencies_paths: null,
+				file_function: null,
+				handler_stop: null,
+				path,
+				promise_deps: null,
+				promise_deps_resolve: null,
+				promise_stopped: null,
+				promise_stopped_resolve: null,
+				status: SERVICE_STATUS_PENDING,
+				watcher: null,
+			});
 		}
+		else if (service_object.status < SERVICE_STATUS_STOPPING) continue;
+		start_queue.push(service_object);
+	}
+	await Promise.all(
+		start_queue.map(service_start)
 	);
-}
-const service_start_inner = async (path, service_object, file_content) => {
-	if (services_active.has(path)) {
-		await service_stop_handler(service_object);
-	}
-	const content_object = service_object.content = {};
-	log('start service: ' + path);
-
-	const start_interval = setInterval(() => {
-		log(`[warning] ${path}: still starting`);
-	}, 1e3);
-
-	if (file_content.includes('globals.')) {
-		log(`[deprecated] ${path}: uses globals object`);
-	}
-
-	try {
-		const result = await (new AsyncFunction(
-			'require',
-			'custom_import',
-			`const log=a=>rtjscomp.log(${
-				JSON.stringify(path + ': ')
-			}+a);${
-				file_content.replace(IMPORT_REG, 'custom_import(') + '\n'
-			}`
-		)).call(content_object, custom_require, custom_import);
-		if (service_object.stopped) {
-			clearInterval(start_interval);
-			return;
-		}
-		if (typeof result === 'function') {
-			service_object.handler_stop = result;
-		}
-	}
-	catch (err) {
-		clearInterval(start_interval);
-		log(`[error] ${path}: ${err.message}`);
-		if (service_object.stopped) return;
-		return service_stop(service_object, false);
-	}
-
-	const handler_start = content_object.start;
-	if (handler_start) {
-		log(`[deprecated] ${path}: has start method`);
-		delete content_object.start;
-		try {
-			await handler_start();
-		}
-		catch (err) {
-			clearInterval(start_interval);
-			log(`[error] ${path} start: ${err.message}`);
-			return service_stop(service_object, false);
-		}
-	}
-	clearInterval(start_interval);
-
-	if (content_object.stop) {
-		log(`[deprecated] ${path}: has stop method`);
-		service_object.handler_stop = content_object.stop;
-		delete content_object.stop;
-	}
-
-	services_active.set(path, service_object);
-	if (log_verbose) log('started service: ' + path);
 }
 const services_shutdown = () => (
 	Promise.all(
-		Array.from(services_active.values())
-			.map(service_object => service_stop(service_object, true))
+		[...services.values()]
+			// so they will not be restarted
+			.map(service_object => (
+				service_object.dependencies = null,
+				service_object
+			))
+			.map(service_stop)
 	)
 )
-const service_stop = (service_object, forget) => (
-	service_object.stopped = true,
-	forget && service_object.watcher &&
-		service_object.watcher.close(),
-	service_stop_handler(service_object)
-)
-const service_stop_handler = async service_object => {
-	services_active.delete(service_object.path);
+/**
+	(re)start service
+*/
+const service_start = async service_object => {
+	if (!services_loaded_promise) {
+		services_loaded_promise = new Promise(resolve => {
+			services_loaded_promise_resolve = resolve;
+		});
+	}
+	const {path} = service_object;
+	if (log_verbose) log(path + ': prepare for (re)start');
+	let start_interval = 0;
+	try {
+		// if service is running, stop it
+		if (
+			service_object.status === SERVICE_STATUS_WAITING ||
+			service_object.status === SERVICE_STATUS_STARTING
+		) {
+			if (log_verbose) log(path + ': abort previous start');
+			service_object.status = SERVICE_STATUS_PENDING;
+			if (service_object.promise_deps_resolve) {
+				service_object.promise_deps_resolve();
+			}
+		}
+		else if (service_object.status === SERVICE_STATUS_ACTIVE) {
+			service_object.status = SERVICE_STATUS_PENDING;
+			// restart all depending services
+			for (const other of services.values())
+			if (
+				(
+					other.status === SERVICE_STATUS_STARTING ||
+					other.status === SERVICE_STATUS_ACTIVE
+				) &&
+				other.dependencies &&
+				other.dependencies.includes(service_object)
+			) {
+				other.dependencies = null;
+				service_start(other);
+			}
+			service_stop_inner(service_object);
+		}
+		await service_object.promise_stopped;
+		// service is not running, now start it
+		if (service_object.status > SERVICE_STATUS_ACTIVE) {
+			service_object.status = SERVICE_STATUS_PENDING;
+		}
+		service_object.promise_stopped = new Promise(resolve => {
+			service_object.promise_stopped_resolve = resolve;
+		});
+		if (!service_object.file_function) {
+			const path_real = PATH_PUBLIC + path + '.service.js';
+			const file_content = await fsp.readFile(path_real, 'utf8');
+			if (service_object.status !== SERVICE_STATUS_PENDING) return;
+			if (!service_object.watcher) {
+				let timeout = 0;
+				service_object.watcher = fs_watch(path_real, WATCH_OPTIONS, () => (
+					clearTimeout(timeout),
+					timeout = setTimeout(() => (
+						log_verbose && log('file updated: ' + path),
+						service_object.file_function = null,
+						service_start(service_object)
+					), 50)
+				));
+			}
+
+			if (file_content.includes('globals.')) {
+				log(`[deprecated] ${path}: uses globals object`);
+			}
+
+			service_object.dependencies_paths = [];
+			for (let [, dep] of file_content.matchAll(SERVICE_REQUIRE_REG)) {
+				const first_char = dep.charCodeAt(0);
+				const last_char = dep.charCodeAt(dep.length - 1);
+				if (
+					dep.length <3 ||
+					(first_char !== 34 || last_char !== 34) && // "
+					(first_char !== 39 || last_char !== 39) // '
+				) {
+					throw new Error('service_require() needs inline string');
+				}
+				if (
+					!service_object.dependencies_paths.includes(
+						dep = dep.slice(1, -1)
+					)
+				) {
+					service_object.dependencies_paths.push(dep);
+				}
+			}
+
+			service_object.file_function = new AsyncFunction(
+				'require',
+				'custom_import',
+				'service_require',
+				'service_require_try',
+				`const log=a=>rtjscomp.log(${
+					JSON.stringify(path + ': ')
+				}+a);${
+					file_content
+						.replace(IMPORT_REG, 'custom_import(')
+				}`
+			);
+		}
+
+		service_object.dependencies = [];
+		let waiting_needed = false;
+		for (const dep_path of service_object.dependencies_paths) {
+			const dep = services.get(dep_path);
+			if (dep == null) {
+				throw new Error('unknown required service: ' + dep_path);
+			}
+			service_object.dependencies.push(dep);
+			waiting_needed = (
+				waiting_needed ||
+				dep.status !== SERVICE_STATUS_ACTIVE
+			);
+		}
+		if (waiting_needed) {
+			if (log_verbose) log(path + ': wait for dependencies');
+			service_object.status = SERVICE_STATUS_WAITING;
+			service_object.promise_deps = new Promise(resolve => {
+				service_object.promise_deps_resolve = resolve;
+			});
+			await service_object.promise_deps;
+			if (service_object.status !== SERVICE_STATUS_WAITING) return;
+		}
+
+		log('start service: ' + path);
+		service_object.status = SERVICE_STATUS_STARTING;
+		start_interval = setInterval(() => {
+			log(`[warning] ${path}: still starting`);
+		}, 5e3);
+		const content_object = service_object.content = {};
+		const result = await service_object.file_function.call(
+			content_object,
+			custom_require,
+			custom_import,
+			service_require,
+			service_require_try,
+		);
+		if (service_object.status !== SERVICE_STATUS_STARTING) return;
+		if (typeof result === 'function') {
+			service_object.handler_stop = result;
+		}
+		const handler_start = content_object.start;
+		if (handler_start) {
+			log(`[deprecated] ${path}: has start method`);
+			delete content_object.start;
+			await handler_start();
+			if (service_object.status !== SERVICE_STATUS_STARTING) return;
+		}
+		if (content_object.stop) {
+			log(`[deprecated] ${path}: has stop method`);
+			service_object.handler_stop = content_object.stop;
+			delete content_object.stop;
+		}
+
+		if (log_verbose) log('started service: ' + path);
+		service_object.status = SERVICE_STATUS_ACTIVE;
+	}
+	catch (err) {
+		if (!err instanceof Error) {
+			err = new Error(err + '?! wtf');
+		}
+		log(`[error] ${
+			path
+		}${
+			linenumber_try(err)
+		}: ${
+			err.message
+		}`);
+		service_object.status = SERVICE_STATUS_FAILED;
+		service_object.dependencies = null;
+		return;
+	}
+	finally {
+		clearInterval(start_interval);
+		service_object.promise_deps =
+		service_object.promise_deps_resolve = null;
+		if (service_object.status !== SERVICE_STATUS_ACTIVE) {
+			service_object.promise_stopped_resolve();
+			services_loaded_promise_try();
+		}
+	}
+
+	// restart waiting services
+	other: for (const other of services.values())
+	if (other.status === SERVICE_STATUS_WAITING) {
+		for (const dep of other.dependencies)
+		if (dep.status !== SERVICE_STATUS_ACTIVE) {
+			continue other;
+		}
+		other.promise_deps_resolve();
+	}
+	services_loaded_promise_try();
+}
+/**
+	check if any loading services are left
+*/
+const services_loaded_promise_try = () => {
+	if (!services_loaded_promise) return;
+	for (const service_object of services.values())
+	if (
+		service_object.status < SERVICE_STATUS_ACTIVE
+	) return;
+	services_loaded_promise_resolve();
+	services_loaded_promise =
+	services_loaded_promise_resolve = null;
+}
+/**
+	stop and forget service
+*/
+const service_stop = async service_object => {
 	log('stop service: ' + service_object.path);
-	const handler_stop = service_object.handler_stop;
+	service_object.status = SERVICE_STATUS_STOPPING;
+	service_object.file_function = null;
+	if (service_object.watcher) {
+		service_object.watcher.close();
+	}
+
+	for (const other of services.values())
+	if (
+		other.dependencies &&
+		other.dependencies.includes(service_object)
+	) {
+		other.dependencies = null;
+		if (other.status !== SERVICE_STATUS_STOPPING) {
+			service_start(other);
+		}
+	}
+
+	if (service_object.promise_deps_resolve) {
+		service_object.promise_deps_resolve();
+	}
+	else {
+		await service_stop_inner(service_object);
+	}
+	services.delete(service_object.path);
+	if (log_verbose) log('stopped service: ' + service_object.path);
+}
+/**
+	stop service so it can be forgot or restarted
+*/
+const service_stop_inner = async service_object => {
+	const {
+		handler_stop,
+		path,
+	} = service_object;
 	if (handler_stop) {
+		service_object.handler_stop = null;
 		const stop_interval = setInterval(() => {
-			log(`[warning] ${service_object.path}: still stopping`);
+			log(`[warning] ${path}: still stopping`);
 		}, 1e3);
 		try {
-			service_object.handler_stop = null;
 			await handler_stop();
 		}
 		catch (err) {
-			log(`[error] ${service_object.path} stop: ${err.message}`);
+			log(`[error] ${
+				path
+			}${
+				linenumber_try(err)
+			} stop handler: ${
+				err.message
+			}`);
+			service_object.status = SERVICE_STATUS_FAILED;
 		}
 		clearInterval(stop_interval);
 	}
-	if (log_verbose) log('stopped service: ' + service_object.path);
+	service_object.promise_stopped_resolve();
 }
-global.service_require = path => {
-	const service = services_active.get(path);
-	if (service != null) return service.content;
+const service_require = path => {
+	const service_object = services.get(path);
+	if (
+		service_object != null &&
+		service_object.status === SERVICE_STATUS_ACTIVE
+	) return service_object.content;
 	throw new Error('service required: ' + path);
 }
-global.service_require_try = path => {
-	const service = services_active.get(path);
+const service_require_try = path => {
+	const service_object = services.get(path);
 	return (
-		service != null
-		?	service.content
+		service_object != null &&
+		service_object.status === SERVICE_STATUS_ACTIVE
+		?	service_object.content
 		:	null
 	);
 }
@@ -390,7 +622,7 @@ const file_keep_new = async (path, callback) => {
 	let timeout = 0;
 	return fs_watch(path, WATCH_OPTIONS, () => (
 		clearTimeout(timeout),
-		timeout = setTimeout(() => (
+		timeout = setTimeout(() => exiting || (
 			log_verbose && log('file updated: ' + path),
 			fsp.readFile(path, 'utf8')
 				.catch(() => null)
@@ -399,6 +631,18 @@ const file_keep_new = async (path, callback) => {
 	));
 }
 
+const get_prop_bool = (obj, prop, fallback) => {
+	if (
+		obj === null ||
+		!(prop in obj)
+	) return fallback;
+	const value = obj[prop];
+	if (typeof value !== 'boolean') {
+		throw prop + ' must be boolean';
+	}
+	delete obj[prop];
+	return value;
+}
 const get_prop_uint = (obj, prop, fallback) => {
 	if (
 		obj === null ||
@@ -467,6 +711,26 @@ const parse_old_map = data => (
 			.map(entry => entry.split(':'))
 	)
 )
+const config_path_check = (path, allow_empty = false) => {
+	if (!allow_empty && !path) {
+		throw 'path is empty';
+	}
+	if (path.charCodeAt(0) === 47) {
+		throw 'path must not start with /';
+	}
+	if (path.charCodeAt(path.length - 1) === 47) {
+		throw 'path must not end with /';
+	}
+	if (path.includes('..')) {
+		throw 'path must not contain ..';
+	}
+	if (path.includes('~')) {
+		throw 'path must not contain ~';
+	}
+	if (path.includes('//')) {
+		throw 'path must not contain //';
+	}
+}
 
 let log_history = rtjscomp.log_history = [];
 actions.log_clear = () => {
@@ -541,6 +805,7 @@ const request_handle = async (request, response, https) => {
 		if (
 			path.includes('php') ||
 			path.includes('sql') ||
+			path.includes('.git/') ||
 			path_ghosts.has(path)
 		) return;
 
@@ -598,6 +863,7 @@ const request_handle = async (request, response, https) => {
 		).toLowerCase();
 
 		let file_gz_enabled = (
+			gz_enabled &&
 			'accept-encoding' in request_headers &&
 			!type_raws.has(file_type) &&
 			request_headers['accept-encoding'].split(HTTP_LIST_REG).includes('gzip')
@@ -639,7 +905,7 @@ const request_handle = async (request, response, https) => {
 				file_dyn_enabled
 				?	'dynam'
 				:	'stat'
-			}ic file: ${path_real}`);
+			}ic file: ${path}`);
 
 			if (
 				path_hiddens.has(path) ||
@@ -743,6 +1009,8 @@ const request_handle = async (request, response, https) => {
 							'response',
 							'require',
 							'custom_import',
+							'service_require',
+							'service_require_try',
 							code
 						);
 					}
@@ -881,47 +1149,76 @@ const request_handle = async (request, response, https) => {
 				)
 			]);
 
-			if (services_loading.size > 0) {
-				await Promise.all(Array.from(services_loading));
-			}
+			await services_loaded_promise;
 
+			let returned;
 			try {
-				await file_function(
+				returned = await file_function(
 					file_function_input,
 					file_function_output,
 					request,
 					response,
 					custom_require,
-					custom_import
+					custom_import,
+					service_require,
+					service_require_try,
 				);
-				file_function_output.end();
 			}
 			catch (err) {
 				if (err instanceof Error) {
 					log(`[error] ${path}: ${err.message}`);
-
-					if (err.message.startsWith('service required: ')) {
-						err = 503;
+					returned = (
+						err.message.startsWith('service required: ')
+						?	503
+						:	500
+					);
+				}
+				else if (typeof err === 'number') {
+					log(`[deprecated] ${path}: status code thrown, use return instead`);
+					returned = err;
+				}
+				else {
+					log(`[error] ${path}: invalid throw type: ${typeof err}`);
+					returned = 500;
+				}
+			}
+			if (returned != null) {
+				if (response.headersSent) {
+					if (
+						response.writableEnded != null
+						?	!response.writableEnded
+						:	!response.finished
+					) {
+						file_function_output.end(`${
+							file_type === 'html'
+							?	'<hr>'
+							:	'\n\n---\n'
+						}ERROR!`);
 					}
 				}
-				if (typeof err === 'number') {
+				else if (file_gz_enabled) {
 					response.removeHeader('Content-Encoding');
-					throw err;
 				}
-
-				file_function_output.end((
-					file_type === 'html'
-					?	'<hr>'
-					:	'\n\n---\n'
-				) + 'ERROR!');
+				if (typeof returned !== 'number') {
+					log(`[error] ${path}: invalid return type: ${typeof returned}`);
+					throw 500;
+				}
+				if (response.headersSent) {
+					if (returned < 500) {
+						log(`[error] ${path}: status code after content`);
+						throw 500;
+					}
+				}
+				throw returned;
 			}
+			file_function_output.end();
 		}
 		else { // static file
 			let file_data = null;
 
 			if (
 				file_gz_enabled &&
-				file_stat.size > 90 &&
+				file_stat.size > 80 &&
 				fs.existsSync(path_real + '.gz')
 			) {
 				file_data = fs.createReadStream(path_real + '.gz');
@@ -958,16 +1255,22 @@ const request_handle = async (request, response, https) => {
 			log(`[error] request failed: ${err}; ${request_ip}; ${request.url}`);
 		}
 
-		response.writeHead(err, {
-			'Content-Type': 'text/html',
-			'Cache-Control': 'no-cache, no-store',
-		});
-		response.end(`<!DOCTYPE html><html><body><h1>HTTP ${err}: ${http.STATUS_CODES[err] || 'Error'}</h1></body></html>`);
+		if (!response.headersSent) {
+			response.writeHead(err, {
+				'Content-Type': 'text/html',
+				'Cache-Control': 'no-cache, no-store',
+			});
+			response.end(`<!DOCTYPE html><html><body><h1>HTTP ${
+				err
+			}: ${
+				http.STATUS_CODES[err] || 'Error'
+			}</h1></body></html>`);
+		}
 	}
 }
 
-let exiting = false;
 actions.halt = async () => {
+	exiting = true;
 	if (log_verbose) log('stop all');
 	await Promise.all([
 		actions.http_stop && actions.http_stop(),
@@ -979,7 +1282,6 @@ actions.halt = async () => {
 }
 actions.exit = async status => {
 	if (exiting) return;
-	exiting = true;
 	if (typeof status !== 'number') status = 0;
 	await actions.halt();
 	if (log_verbose) log('exit');
@@ -1011,6 +1313,7 @@ log(`rtjscomp v${
 	IS_BUN ? 'bun' : 'node'
 } on ${
 	process.platform
+		.replace('win32', 'windows')
 }`);
 
 await file_keep_new(PATH_CONFIG + 'init.js', async data => {
@@ -1160,7 +1463,7 @@ actions.http_kill = async () => {
 	if (http_status_target) return;
 	log('kill http');
 	await Promise.all(
-		Array.from(http_connections.values())
+		[...http_connections.values()]
 			.map(connection => connection.destroy())
 	);
 	if (log_verbose) log('killed http');
@@ -1211,7 +1514,8 @@ try {
 		if (https_status_target) return;
 		log('kill https');
 		await Promise.all(
-			Array.from(https_connections.values()).map(connection => connection.destroy())
+			[...https_connections.values()]
+				.map(connection => connection.destroy())
 		);
 		if (log_verbose) log('killed https');
 		https_connections.clear();
@@ -1229,6 +1533,8 @@ await file_keep_new('rtjscomp.json', data => {
 			throw 'must contain {}';
 		}
 
+		const gzip_level_new = get_prop_uint(data, 'gzip_level', 9);
+		const log_verbose_new = get_prop_bool(data, 'log_verbose', log_verbose_flag);
 		const path_aliases_new = get_prop_map(data, 'path_aliases');
 		const path_ghosts_new = get_prop_list(data, 'path_ghosts');
 		const path_hiddens_new = get_prop_list(data, 'path_hiddens');
@@ -1246,22 +1552,37 @@ await file_keep_new('rtjscomp.json', data => {
 				throw 'unknown: ' + keys_left.join(', ');
 			}
 		}
+		if (gzip_level_new > 9) {
+			throw 'gzip_level > 9';
+		}
+		if (
+			port_http_new > 65535 ||
+			port_https_new > 65535
+		) {
+			throw 'port > 65535';
+		}
 
+		gz_enabled = gzip_level_new > 0;
+		GZIP_OPTIONS.level = gzip_level_new;
+		log_verbose = log_verbose_new;
 		if (path_ghosts_new) {
 			path_ghosts.clear();
 			for (const key of path_ghosts_new) {
+				config_path_check(key);
 				path_ghosts.add(key);
 			}
 		}
 		if (path_hiddens_new) {
 			path_hiddens.clear();
 			for (const key of path_hiddens_new) {
+				config_path_check(key);
 				path_hiddens.add(key);
 			}
 		}
 		if (path_statics_new) {
 			path_statics.clear();
 			for (const key of path_statics_new) {
+				config_path_check(key);
 				path_statics.add(key);
 			}
 		}
@@ -1270,6 +1591,8 @@ await file_keep_new('rtjscomp.json', data => {
 			path_aliases_reverse.clear();
 			path_aliases_templates.clear();
 			for (const [key, value] of path_aliases_new) {
+				config_path_check(key, true);
+				config_path_check(value);
 				if (key.includes('*')) {
 					const path_split = key.split('/');
 					const first = path_split.shift();
@@ -1314,8 +1637,12 @@ await file_keep_new('rtjscomp.json', data => {
 			}
 		}
 
+		for (const path of services_new) config_path_check(path);
 		const promises = [
-			services_list_react(services_new),
+			services_list_react(
+				services_new
+					.filter(path => path.charCodeAt(0) !== 35)
+			),
 		];
 
 		if (port_http_new !== port_http) {

@@ -33,6 +33,8 @@ $ npm start
 
 it is only needed if you want to change default settings. it has the following properties:
 
+- `gzip_level`: compression level, 0-9, default is 9
+- `log_verbose`: boolean, set true for more verbose logging or run with -v
 - `path_aliases`: object where the key is the url path and the value is the file path
 - `path_ghosts`: array of paths that are simply ignored, no response is sent
 - `path_hiddens`: array of paths that give 404
@@ -106,6 +108,7 @@ in every served dynamic file (like .html), you can insert `<?` and `?>` tags to 
 request-independent services can be created using .service.js files referenced in services.txt.
 in both file types (dynamic served and services), you can use all node/bun methods including `require`, but also those:
 
+- `log(msg)`: logs the message to the console
 - `service_require(service path)`: returns the matching service object
 - `service_require_try(service path)`: returns the matching service object or null if not found or if disabled
 - `rtjscomp`: has these properties/methods:
