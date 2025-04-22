@@ -4,7 +4,7 @@
 	"description": "php-like server but with javascript",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/L3P3/rtjscomp"
+		"url": "git+https://github.com/L3P3/rtjscomp.git"
 	},
 	"bugs": {
 		"url": "https://github.com/L3P3/rtjscomp/issues"
@@ -18,9 +18,7 @@
 		"start": "./rtjscomp.js",
 		"build": "./build.js"
 	},
-	"bin": {
-		"rtjscomp": "./rtjscomp.js"
-	},
+	"bin": "./rtjscomp.js",
 	"keywords": [
 		"http",
 		"javascript",
