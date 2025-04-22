@@ -1,6 +1,6 @@
 {
 	"name": "rtjscomp",
-	"version": "0.9.2",
+	"version": "0.9.3",
 	"description": "php-like server but with javascript",
 	"repository": {
 		"type": "git",
@@ -15,7 +15,8 @@
 		"querystring": "latest"
 	},
 	"scripts": {
-		"start": "./rtjscomp.js"
+		"start": "./rtjscomp.js",
+		"build": "./build.js"
 	},
 	"bin": {
 		"rtjscomp": "./rtjscomp.js"

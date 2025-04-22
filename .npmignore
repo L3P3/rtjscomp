@@ -1,0 +1,9 @@
+.github/
+config/
+data/
+node_modules/
+build.js
+changes_before_git.txt
+package-lock.json
+rtjscomp.json
+spam.csv

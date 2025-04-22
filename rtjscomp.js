@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
-	RTJSCOMP by L3P3, 2017-2025
+	@preserve RTJSCOMP by L3P3, 2017-2025
 */
 
 "use strict";
@@ -474,7 +474,7 @@ const service_start = async service_object => {
 		service_object.status = SERVICE_STATUS_ACTIVE;
 	}
 	catch (err) {
-		if (!err instanceof Error) {
+		if (!(err instanceof Error)) {
 			err = new Error(err + '?! wtf');
 		}
 		log(`[error] ${
@@ -667,6 +667,7 @@ const get_prop_list = (obj, prop) => {
 	const value = obj[prop];
 	if (
 		typeof value !== 'object' ||
+		!value ||
 		value.length == null ||
 		value.some(item => typeof item !== 'string')
 	) {
@@ -683,6 +684,7 @@ const get_prop_map = (obj, prop) => {
 	let value = obj[prop];
 	if (
 		typeof value !== 'object' ||
+		!value ||
 		(
 			value = Object.entries(value)
 		).some(([_, item]) => typeof item !== 'string')
@@ -1097,15 +1099,19 @@ const request_handle = async (request, response, https) => {
 									body_raw,
 									content_type.split('boundary=')[1].split(';')[0]
 								)
-									.map(({ name, ...value }) => [
-										name,
-										value.type ? value : value.data.toString()
-									])
+									.map(value => {
+										const {name} = value;
+										delete value.name;
+										return [
+											name,
+											value.type ? value : value.data.toString()
+										];
+									})
 							);
 						}
 					}
 					if (body) {
-						Object.assign(file_function_input, body);
+						Object.assign(file_function_input, /** @type {!Object} */ (body));
 					}
 				}
 				catch (err) {
@@ -1397,13 +1403,13 @@ await file_keep_new(PATH_CONFIG + 'init.js', async data => {
 			json['path_aliases'] = parse_old_map(old_path_aliases);
 		}
 		if (old_port_http) {
-			const number = parseInt(old_port_http);
+			const number = Number(old_port_http);
 			if (!isNaN(number)) {
 				json['port_http'] = number;
 			}
 		}
 		if (old_port_https) {
-			const number = parseInt(old_port_https);
+			const number = Number(old_port_https);
 			if (!isNaN(number)) {
 				json['port_https'] = number;
 			}
