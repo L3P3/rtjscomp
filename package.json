@@ -1,6 +1,6 @@
 {
 	"name": "rtjscomp",
-	"version": "0.9.3",
+	"version": "0.9.4",
 	"description": "php-like server but with javascript",
 	"repository": {
 		"type": "git",
