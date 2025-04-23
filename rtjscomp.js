@@ -20,7 +20,13 @@ const querystring_parse = require('querystring').decode;
 const request_ip_get = require('ipware')().get_ip;
 
 // constants
+const COMPRESS_METHOD_NONE = 0;
+const COMPRESS_METHOD_GZIP = 1;
+const COMPRESS_METHOD_BROTLI = 2;
+const COMPRESS_METHOD_ZSTD = 3;
 const GZIP_OPTIONS = {level: 9};
+const HAS_BROTLI = zlib.createBrotliCompress != null;
+const HAS_ZSTD = zlib.createZstdCompress != null;
 const HTTP_LIST_REG = /,\s*/;
 const IMPORT_REG = /\bimport\(/g;
 const IS_BUN = typeof Bun !== 'undefined';
@@ -38,13 +44,19 @@ const SERVICE_STATUS_STOPPING = 4; // running stop fn
 const SERVICE_STATUS_FAILED = 5; // waiting for fix
 const VERSION = require('./package.json').version;
 const WATCH_OPTIONS = {persistent: true, interval: 1000};
+const ZSTD_c_compressionLevel = 100;
+const ZSTD_OPTIONS = {
+	params: {
+		[ZSTD_c_compressionLevel]: 3,
+	}
+}
 
 // config
 const log_verbose_flag = process.argv.includes('-v');
 let log_verbose = log_verbose_flag;
 let port_http = 0;
 let port_https = 0;
-let gz_enabled = true;
+let compression_enabled = true;
 let exiting = false;
 /// any path -> file
 const path_aliases = new Map([
@@ -863,13 +875,7 @@ const request_handle = async (request, response, https) => {
 			file_type_index + 1
 		).toLowerCase();
 
-		let file_gz_enabled = (
-			gz_enabled &&
-			!request_method_head &&
-			'accept-encoding' in request_headers &&
-			!type_raws.has(file_type) &&
-			request_headers['accept-encoding'].split(HTTP_LIST_REG).includes('gzip')
-		);
+		let file_compression = COMPRESS_METHOD_NONE;
 
 		const file_dyn_enabled = (
 			type_dynamics.has(file_type) &&
@@ -1139,18 +1145,48 @@ const request_handle = async (request, response, https) => {
 			file_function_input['path'] = request_url_parsed.pathname;
 			file_function_input['user_agent'] = request_headers['user-agent'];
 
-			let file_function_output;
+			let file_function_output = response;
 			response.setHeader('Cache-Control', 'no-cache, no-store');
 
-			if (file_gz_enabled) {
-				response.setHeader('Content-Encoding', 'gzip');
-
-				(
-					file_function_output = zlib.createGzip(GZIP_OPTIONS)
-				).pipe(response);
-			}
-			else {
-				file_function_output = response;
+			if (
+				compression_enabled &&
+				'accept-encoding' in request_headers &&
+				!type_raws.has(file_type)
+			) {
+				const encodings = request_headers['accept-encoding'].split(HTTP_LIST_REG);
+				if (
+					HAS_ZSTD &&
+					encodings.includes('zstd')
+				) {
+					file_compression = COMPRESS_METHOD_ZSTD;
+					response.setHeader('Content-Encoding', 'zstd');
+					if (!request_method_head) {
+						(
+							file_function_output = zlib.createZstdCompress(ZSTD_OPTIONS)
+						).pipe(response);
+					}
+				}
+				else if (
+					HAS_BROTLI &&
+					encodings.includes('br')
+				) {
+					file_compression = COMPRESS_METHOD_BROTLI;
+					response.setHeader('Content-Encoding', 'br');
+					if (!request_method_head) {
+						(
+							file_function_output = zlib.createBrotliCompress()
+						).pipe(response);
+					}
+				}
+				else if (encodings.includes('gzip')) {
+					file_compression = COMPRESS_METHOD_GZIP;
+					response.setHeader('Content-Encoding', 'gzip');
+					if (!request_method_head) {
+						(
+							file_function_output = zlib.createGzip(GZIP_OPTIONS)
+						).pipe(response);
+					}
+				}
 			}
 
 			if (spam_enabled) spam('execute', [
@@ -1223,7 +1259,7 @@ const request_handle = async (request, response, https) => {
 						}ERROR!`);
 					}
 				}
-				else if (file_gz_enabled) {
+				else if (file_compression !== COMPRESS_METHOD_NONE) {
 					response.removeHeader('Content-Encoding');
 				}
 				if (typeof returned !== 'number') {
@@ -1241,35 +1277,67 @@ const request_handle = async (request, response, https) => {
 			file_function_output.end();
 		}
 		else { // static file
-			let file_data = null;
+			const compression_enabled_type = (
+				compression_enabled &&
+				!type_raws.has(file_type)
+			);
+			let path_real_send = path_real;
 
 			if (
-				file_gz_enabled &&
-				file_stat.size > 80 &&
-				fs.existsSync(path_real + '.gz')
+				compression_enabled_type &&
+				'accept-encoding' in request_headers
 			) {
-				file_data = fs.createReadStream(path_real + '.gz');
-			}
-			else {
-				file_gz_enabled = false;
-				file_data = fs.createReadStream(path_real);
+				const encodings = request_headers['accept-encoding'].split(HTTP_LIST_REG);
+				if (
+					encodings.includes('zstd') &&
+					fs.existsSync(path_real + '.zst')
+				) {
+					file_compression = COMPRESS_METHOD_ZSTD;
+					path_real_send += '.zst';
+				}
+				else if (
+					encodings.includes('br') &&
+					fs.existsSync(path_real + '.br')
+				) {
+					file_compression = COMPRESS_METHOD_BROTLI;
+					path_real_send += '.br';
+				}
+				else if (
+					encodings.includes('gzip') &&
+					fs.existsSync(path_real + '.gz')
+				) {
+					file_compression = COMPRESS_METHOD_GZIP;
+					path_real_send += '.gz';
+				}
 			}
 
-			if (spam_enabled) spam('static_send', [path, file_gz_enabled]);
+			if (spam_enabled) spam('static_send', [path, file_compression]);
 			response.setHeader('Cache-Control', 'public, max-age=600');
-
-			if (file_gz_enabled) {
-				response.setHeader('Content-Encoding', 'gzip');
+			if (compression_enabled_type) {
+				response.setHeader('Vary', 'Accept-Encoding');
 			}
-			else {
+
+			switch (file_compression) {
+			case COMPRESS_METHOD_NONE:
 				response.setHeader('Content-Length', file_stat.size);
+				break;
+			case COMPRESS_METHOD_GZIP:
+				response.setHeader('Content-Encoding', 'gzip');
+				break;
+			case COMPRESS_METHOD_BROTLI:
+				response.setHeader('Content-Encoding', 'br');
+				break;
+			case COMPRESS_METHOD_ZSTD:
+				response.setHeader('Content-Encoding', 'zstd');
+				break;
 			}
 
 			if (request_method_head) {
 				response.end();
 			}
 			else {
-				file_data.pipe(response);
+				fs.createReadStream(path_real_send)
+					.pipe(response);
 			}
 		}
 	}
@@ -1347,6 +1415,8 @@ log(`rtjscomp v${
 	process.platform
 		.replace('win32', 'windows')
 }`);
+if (log_verbose && !HAS_BROTLI) log('[hint] brotli not available');
+if (log_verbose && !HAS_ZSTD) log('[hint] zstd not available');
 
 await file_keep_new(PATH_CONFIG + 'init.js', async data => {
 	if (!data) return;
@@ -1554,7 +1624,7 @@ try {
 	}
 }
 catch (err) {
-	if (log_verbose) log('https: no cert, disabled');
+	if (log_verbose) log('[hint] https: no cert, disabled');
 }
 
 // config
@@ -1565,7 +1635,8 @@ await file_keep_new('rtjscomp.json', data => {
 			throw 'must contain {}';
 		}
 
-		const gzip_level_new = get_prop_uint(data, 'gzip_level', 9);
+		const compression_enabled_new = get_prop_bool(data, 'compress', true);
+		const gzip_level_new = get_prop_uint(data, 'gzip_level', 3);
 		const log_verbose_new = get_prop_bool(data, 'log_verbose', log_verbose_flag);
 		const path_aliases_new = get_prop_map(data, 'path_aliases');
 		const path_ghosts_new = get_prop_list(data, 'path_ghosts');
@@ -1577,6 +1648,7 @@ await file_keep_new('rtjscomp.json', data => {
 		const type_dynamics_new = get_prop_list(data, 'type_dynamics');
 		const type_mimes_new = get_prop_map(data, 'type_mimes');
 		const type_raws_new = get_prop_list(data, 'type_raws');
+		const zstd_level_new = get_prop_uint(data, 'zstd_level', 3);
 
 		if (data) {
 			const keys_left = Object.keys(data);
@@ -1587,6 +1659,9 @@ await file_keep_new('rtjscomp.json', data => {
 		if (gzip_level_new > 9) {
 			throw 'gzip_level > 9';
 		}
+		if (zstd_level_new > 19) {
+			throw 'zstd_level > 19';
+		}
 		if (
 			port_http_new > 65535 ||
 			port_https_new > 65535
@@ -1594,8 +1669,9 @@ await file_keep_new('rtjscomp.json', data => {
 			throw 'port > 65535';
 		}
 
-		gz_enabled = gzip_level_new > 0;
-		GZIP_OPTIONS.level = gzip_level_new;
+		compression_enabled = compression_enabled_new;
+		GZIP_OPTIONS.level = compression_enabled ? gzip_level_new : 0;
+		ZSTD_OPTIONS.params[ZSTD_c_compressionLevel] = zstd_level_new;
 		log_verbose = log_verbose_new;
 		if (path_ghosts_new) {
 			path_ghosts.clear();
