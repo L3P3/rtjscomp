@@ -20,8 +20,6 @@ const querystring_parse = require('querystring').decode;
 const request_ip_get = require('ipware')().get_ip;
 
 // constants
-const AGENT_CHECK_BOT = /bot|googlebot|crawler|spider|robot|crawling|favicon/i;
-const AGENT_CHECK_MOBIL = /(android|bb\d+|meego).+mobile|avantgo|bada\/|blackberry|blazer|compal|elaine|fennec|hiptop|iemobile|ip(hone|od)|iris|kindle|lge |maemo|midp|mmp|mobile.+firefox|netfront|opera m(ob|in)i|palm( os)?|phone|p(ixi|re)\/|plucker|pocket|psp|series(4|6)0|symbian|treo|up\.(browser|link)|vodafone|wap|windows ce|xda|xiino|android|ipad|playbook|silk/i;
 const GZIP_OPTIONS = {level: 9};
 const HTTP_LIST_REG = /,\s*/;
 const IMPORT_REG = /\bimport\(/g;
@@ -778,6 +776,7 @@ const request_handle = async (request, response, https) => {
 	const request_method = request.method;
 	const request_headers = request.headers;
 	const request_ip = request_ip_get(request).clientIp;
+	const request_method_head = request_method === 'HEAD';
 
 	if ('x-forwarded-proto' in request_headers) {
 		https = request_headers['x-forwarded-proto'] === 'https';
@@ -866,6 +865,7 @@ const request_handle = async (request, response, https) => {
 
 		let file_gz_enabled = (
 			gz_enabled &&
+			!request_method_head &&
 			'accept-encoding' in request_headers &&
 			!type_raws.has(file_type) &&
 			request_headers['accept-encoding'].split(HTTP_LIST_REG).includes('gzip')
@@ -876,7 +876,10 @@ const request_handle = async (request, response, https) => {
 			!path_statics.has(path)
 		);
 
-		if (request_method !== 'GET') {
+		if (
+			!request_method_head &&
+			request_method !== 'GET'
+		) {
 			if (!file_dyn_enabled) throw 405;
 			if ('content-length' in request_headers) {
 				request_body_promise = new Promise(resolve => {
@@ -922,6 +925,12 @@ const request_handle = async (request, response, https) => {
 				try {
 					if (file_content.includes('\r')) {
 						throw 'illegal line break, must be unix';
+					}
+					if (
+						file_content.includes('response.write(') ||
+						file_content.includes('response.end(')
+					) {
+						throw 'response.write() not allowed, use output.write()';
 					}
 					if (file_content.includes('globals.')) {
 						log(`[deprecated] ${path}: uses globals object`);
@@ -1120,14 +1129,15 @@ const request_handle = async (request, response, https) => {
 				}
 			}
 
-			const request_headers_user_agent = file_function_input['user_agent'] = request_headers['user-agent'];
-			file_function_input['bot'] = AGENT_CHECK_BOT.test(request_headers_user_agent);
-			file_function_input['mobil'] = AGENT_CHECK_MOBIL.test(request_headers_user_agent);
-
 			file_function_input['https'] = https;
 			file_function_input['ip'] = request_ip;
-			file_function_input['method'] = request_method.toLowerCase();
+			file_function_input['method'] = (
+				request_method_head
+				?	'get'
+				:	request_method.toLowerCase()
+			);
 			file_function_input['path'] = request_url_parsed.pathname;
+			file_function_input['user_agent'] = request_headers['user-agent'];
 
 			let file_function_output;
 			response.setHeader('Cache-Control', 'no-cache, no-store');
@@ -1154,6 +1164,13 @@ const request_handle = async (request, response, https) => {
 						.map(e => (e[0] !== 'user_agent' && typeof e[1] === 'string' && e[1].length > 20) ? [e[0], e[1].slice(0, 20) + '...'] : e)
 				)
 			]);
+
+			if (request_method_head) {
+				file_function_output.write =
+				file_function_output.end = () => {
+					throw null;
+				}
+			}
 
 			await services_loaded_promise;
 
@@ -1183,10 +1200,14 @@ const request_handle = async (request, response, https) => {
 					log(`[deprecated] ${path}: status code thrown, use return instead`);
 					returned = err;
 				}
-				else {
+				else if (err !== null) {
 					log(`[error] ${path}: invalid throw type: ${typeof err}`);
 					returned = 500;
 				}
+			}
+			if (request_method_head) {
+				delete file_function_output.write;
+				delete file_function_output.end;
 			}
 			if (returned != null) {
 				if (response.headersSent) {
@@ -1244,7 +1265,12 @@ const request_handle = async (request, response, https) => {
 				response.setHeader('Content-Length', file_stat.size);
 			}
 
-			file_data.pipe(response);
+			if (request_method_head) {
+				response.end();
+			}
+			else {
+				file_data.pipe(response);
+			}
 		}
 	}
 	catch (err) {
