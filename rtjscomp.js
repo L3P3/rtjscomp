@@ -51,6 +51,7 @@ const log_verbose_flag = process.argv.includes('-v');
 let log_verbose = log_verbose_flag;
 let port_http = 0;
 let port_https = 0;
+let upload_limit = 10 * 1024 * 1024;
 let compression_enabled = true;
 let exiting = false;
 /// any path -> file
@@ -1063,6 +1064,17 @@ const request_handle = async (request, response, https) => {
 		) {
 			if (!file_dyn_enabled) throw 405;
 			if ('content-length' in request_headers) {
+				const content_length = Number(request_headers['content-length']);
+				if (
+					isNaN(content_length) ||
+					content_length < 0 ||
+					content_length % 1 > 0
+				) {
+					throw 400;
+				}
+				if (content_length > upload_limit) {
+					throw 413;
+				}
 				request_body_promise = new Promise(resolve => {
 					const request_body_chunks = [];
 					request.on('data', chunk => {
@@ -1539,6 +1551,9 @@ const request_handle = async (request, response, https) => {
 				http.STATUS_CODES[err] || 'Error'
 			}</h1></body></html>`);
 		}
+		if ('content-length' in request_headers) {
+			request.socket.destroy();
+		}
 	}
 }
 
@@ -1821,6 +1836,7 @@ await file_keep_new('rtjscomp.json', data => {
 		const type_dynamics_new = get_prop_list(data, 'type_dynamics');
 		const type_mimes_new = get_prop_map(data, 'type_mimes');
 		const type_raws_new = get_prop_list(data, 'type_raws');
+		const upload_limit_new = get_prop_uint(data, 'upload_limit', 10);
 		const zstd_level_new = get_prop_uint(data, 'zstd_level', 3);
 
 		if (data) {
@@ -1832,20 +1848,21 @@ await file_keep_new('rtjscomp.json', data => {
 		if (gzip_level_new > 9) {
 			throw 'gzip_level > 9';
 		}
-		if (zstd_level_new > 19) {
-			throw 'zstd_level > 19';
-		}
 		if (
 			port_http_new > 65535 ||
 			port_https_new > 65535
 		) {
 			throw 'port > 65535';
 		}
+		if (zstd_level_new > 19) {
+			throw 'zstd_level > 19';
+		}
 
 		compression_enabled = compression_enabled_new;
 		GZIP_OPTIONS.level = compression_enabled ? gzip_level_new : 0;
 		ZSTD_OPTIONS.params[ZSTD_c_compressionLevel] = zstd_level_new;
 		log_verbose = log_verbose_new;
+		upload_limit = upload_limit_new * 1024 * 1024;
 		if (path_ghosts_new) {
 			path_ghosts.clear();
 			for (const key of path_ghosts_new) {

@@ -44,6 +44,7 @@ it is only needed if you want to change default settings. it has the following p
 - `type_dynamics`: dynamic file types, see [api](#api)
 - `type_mimes`: file type to mime type map (most common are already set, only overrides)
 - `type_raws`: array of file types that are sent uncompressed
+- `upload_limit`: max upload size in mebibytes, default is 10
 - `zstd_level`: compression level for zstd, 0-19, default is 3
 
 here is an example for a customized setup:
