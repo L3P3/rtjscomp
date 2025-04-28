@@ -29,6 +29,7 @@ const LINENUMBER_REG = /:([0-9]+)[\):]/;
 const PATH_CONFIG = 'config/';
 const PATH_DATA = 'data/';
 const PATH_PUBLIC = 'public/';
+const PLUS_REG = /\+/g;
 const RESOLVE_OPTIONS = {paths: [require('path').resolve()]};
 const SERVICE_REQUIRE_REG = /\bservice_require\(([^)]*)\)/g;
 const SERVICE_STATUS_PENDING = 0; // just added to list
@@ -51,7 +52,7 @@ const log_verbose_flag = process.argv.includes('-v');
 let log_verbose = log_verbose_flag;
 let port_http = 0;
 let port_https = 0;
-let upload_limit = 10 * 1024 * 1024;
+let upload_limit = 0;
 let compression_enabled = true;
 let exiting = false;
 /// any path -> file
@@ -942,7 +943,9 @@ const querystring_parse = (querystring, result) => {
 		if (!key) {
 			throw 'key is empty';
 		}
-		value = decodeURIComponent(value || '');
+		value = decodeURIComponent(
+			(value || '').replace(PLUS_REG, ' ')
+		);
 		if (key in result) {
 			if ((result[key] instanceof Array) !== array) {
 				throw 'type mismatch';
