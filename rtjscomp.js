@@ -14,11 +14,6 @@ const http = require('http');
 const url = require('url');
 const zlib = require('zlib');
 
-// external libs
-const multipart_parse = require('parse-multipart-data').parse;
-const querystring_parse = require('querystring').decode;
-const request_ip_get = require('ipware')().get_ip;
-
 // constants
 const COMPRESS_METHOD_NONE = 0;
 const COMPRESS_METHOD_GZIP = 1;
@@ -720,7 +715,7 @@ const parse_old_map = data => (
 				entry.length > 0 &&
 				entry.charCodeAt(0) !== 35
 			)
-			.map(entry => entry.split(':'))
+			.map(entry => entry.split(':', 2))
 	)
 )
 const config_path_check = (path, allow_empty = false) => {
@@ -784,10 +779,190 @@ const spam = (type, data) => {
 	}
 }
 
+const multipart_parse = (body_raw, boundary, result) => {
+	boundary = Buffer.from(boundary);
+	if (boundary[0] === 34) {
+		boundary = boundary.subarray(1, -1);
+	}
+	const boundary_length = boundary.length;
+	/// -- + boundary + \r\n
+	const boundary_length_full = boundary_length + 4;
+	/// last possible index for full boundary
+	const boundary_index_limit = body_raw.length - boundary_length_full;
+	let index_start = 0;
+	let index_end = 0;
+	while (
+		// find next boundary
+		(
+			index_end = body_raw.indexOf(45, index_end) // -
+		) >= 0 &&
+		index_end <= boundary_index_limit
+	) {
+		// check if it actually is a boundary
+		if (
+			body_raw[index_end + 1] !== 45 || // -
+			index_end > 0 && body_raw[index_end - 2] !== 13 || // \r
+			index_end > 0 && body_raw[index_end - 1] !== 10 || // \n
+			body_raw.compare(
+				boundary,
+				0,
+				boundary_length,
+				index_end + 2,
+				index_end + 2 + boundary_length
+			) !== 0
+		) {
+			++index_end;
+			continue;
+		}
+		// skip first boundary
+		if (index_start > 0) {
+			if (index_end - index_start < 20) {
+				throw 'part too short';
+			}
+			// find end of header
+			let index_header_end = index_start;
+			while (
+				(
+					index_header_end = body_raw.indexOf(13, index_header_end) // \r
+				) >= 0 &&
+				body_raw[index_header_end + 1] !== 10 || // \n
+				body_raw[index_header_end + 2] !== 13 || // \r
+				body_raw[index_header_end + 3] !== 10 // \n
+			) {
+				++index_header_end;
+			}
+			if (index_header_end < 0) {
+				throw 'part header end not found';
+			}
+			// parse header
+			let header_disposition = '';
+			let header_content_type = '';
+			for (
+				const header_line of
+				body_raw
+					.toString(
+						'utf8',
+						index_start,
+						index_header_end
+					)
+					.split('\r\n', 2)
+			) {
+				if (!header_line.startsWith('Content-')) {
+					throw 'illegal part header';
+				}
+				const [name, value] = header_line.slice(8).split(': ', 2);
+				if (name === 'Disposition') {
+					if (!value.startsWith('form-data; ')) {
+						throw 'illegal disposition part header';
+					}
+					header_disposition = value.slice(11);
+				}
+				else if (name === 'Type') {
+					header_content_type = value;
+				}
+				// else if (name === 'Transfer-Encoding') {}
+				else {
+					throw 'illegal part header';
+				}
+			}
+			if (!header_disposition) {
+				throw 'part disposition header missing';
+			}
+			let header_disposition_name = '';
+			let header_disposition_filename = '';
+			for (const header_disposition_entry of header_disposition.split('; ')) {
+				let [name, value] = header_disposition_entry.split('=', 2);
+				if (value.charCodeAt(0) === 34) {
+					value = value.slice(1, -1);
+				}
+				if (name === 'name') {
+					header_disposition_name = value;
+				}
+				else if (name === 'filename') {
+					header_disposition_filename = value;
+				}
+				else {
+					throw 'illegal disposition part header';
+				}
+			}
+			if (!header_disposition_name) {
+				throw 'part name header missing';
+			}
+			const part_result = (
+				header_content_type
+				?	{
+					filename: header_disposition_filename,
+					data: body_raw.subarray(
+						index_header_end + 4,
+						index_end - 2
+					),
+					type: header_content_type,
+				}
+				:	(
+					body_raw
+						.toString(
+							'utf8',
+							index_header_end + 4,
+							index_end - 2
+						)
+				)
+			);
+			if (header_disposition_name.endsWith('[]')) {
+				header_disposition_name = header_disposition_name.slice(0, -2);
+				if (header_disposition_name in result) {
+					if (!(result[header_disposition_name] instanceof Array)) {
+						throw 'duplicate part name';
+					}
+					result[header_disposition_name].push(part_result);
+				}
+				else {
+					result[header_disposition_name] = [part_result];
+				}
+			}
+			else {
+				if (header_disposition_name in result) {
+					throw 'duplicate part name';
+				}
+				result[header_disposition_name] = part_result;
+			}
+		}
+		index_start = index_end + boundary_length_full;
+		index_end = index_start + 1;
+	}
+}
+
+const querystring_parse = (querystring, result) => {
+	for (const entry of querystring.split('&')) {
+		let [key, value] = entry.split('=', 2);
+		const array = key.endsWith('[]');
+		if (array) {
+			key = key.slice(0, -2);
+		}
+		if (!key) {
+			throw 'key is empty';
+		}
+		value = decodeURIComponent(value || '');
+		if (key in result) {
+			if ((result[key] instanceof Array) !== array) {
+				throw 'type mismatch';
+			}
+			if (array) {
+				result[key].push(value);
+			}
+			else {
+				result[key] = value;
+			}
+		}
+		else {
+			result[key] = array ? [value] : value;
+		}
+	}
+}
+
 const request_handle = async (request, response, https) => {
 	const request_method = request.method;
 	const request_headers = request.headers;
-	const request_ip = request_ip_get(request).clientIp;
+	const request_ip = request_headers['x-forwarded-for'] || request.socket.remoteAddress;
 	const request_method_head = request_method === 'HEAD';
 
 	if ('x-forwarded-proto' in request_headers) {
@@ -1077,21 +1252,21 @@ const request_handle = async (request, response, https) => {
 			}
 
 			if (request_headers['x-input']) {
-				Object.assign(
-					file_function_input,
-					querystring_parse(request_headers['x-input'])
-				);
+				try {
+					querystring_parse(request_headers['x-input'], file_function_input);
+				}
+				catch (err) {
+					log(`[error] ${path} request x-input: ${err}`);
+					throw 400;
+				}
 			}
 
 			if (request_url_parsed.query) {
 				try {
-					Object.assign(
-						file_function_input,
-						querystring_parse(request_url_parsed.query)
-					);
+					querystring_parse(request_url_parsed.query, file_function_input);
 				}
 				catch (err) {
-					log(`[error] ${path} request query: ${err.message}`);
+					log(`[error] ${path} request query: ${err}`);
 					throw 400;
 				}
 			}
@@ -1100,37 +1275,32 @@ const request_handle = async (request, response, https) => {
 				try {
 					const content_type = request.headers['content-type'] || '';
 					const body_raw = file_function_input['body'] = await request_body_promise;
-					let body = null;
-					switch (content_type.split(';')[0]) {
-						case 'application/x-www-form-urlencoded':
-							body = querystring_parse(body_raw.toString());
-							break;
-						case 'application/json':
-							body = JSON.parse(body_raw.toString());
-							break;
-						case 'multipart/form-data': {
-							body = Object.fromEntries(
-								multipart_parse(
-									body_raw,
-									content_type.split('boundary=')[1].split(';')[0]
-								)
-									.map(value => {
-										const {name} = value;
-										delete value.name;
-										return [
-											name,
-											value.type ? value : value.data.toString()
-										];
-									})
-							);
-						}
-					}
-					if (body) {
-						Object.assign(file_function_input, /** @type {!Object} */ (body));
+					switch (
+						content_type.split(';', 1)[0]
+					) {
+					case 'application/json':
+						Object.assign(
+							file_function_input,
+							/** @type {!Object} */ (
+								JSON.parse(body_raw.toString())
+							)
+						);
+						break;
+					case 'application/x-www-form-urlencoded':
+						querystring_parse(body_raw.toString(), file_function_input);
+						break;
+					case 'multipart/form-data':
+						multipart_parse(
+							body_raw,
+							content_type
+								.split('boundary=', 2)[1]
+								.split(';', 1)[0],
+							file_function_input
+						);
 					}
 				}
 				catch (err) {
-					log(`[error] ${path} request body: ${err.message}`);
+					log(`[error] ${path} request body: ${err.message || err}`);
 					throw 400;
 				}
 			}
@@ -1178,7 +1348,10 @@ const request_handle = async (request, response, https) => {
 						).pipe(response);
 					}
 				}
-				else if (encodings.includes('gzip')) {
+				else if (
+					GZIP_OPTIONS.level > 0 &&
+					encodings.includes('gzip')
+				) {
 					file_compression = COMPRESS_METHOD_GZIP;
 					response.setHeader('Content-Encoding', 'gzip');
 					if (!request_method_head) {

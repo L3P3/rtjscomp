@@ -2,9 +2,8 @@
 
 easy to use http server that allows for using javascript just as php was used back in the days
 
-> [!WARNING]  
-> as the issues indicate, a lot of breaking changes are ahead.
-> make sure to check for these in future until version 1.0.0 is relessed.
+> [!NOTE]  
+> this project has not reached v1.0.0 yet, so breaking changes _may appear_ in the future
 
 ## usage
 
@@ -25,7 +24,6 @@ and now http://localhost:8080 offers a greeting!
 for developing rtjscomp itself, clone this repository and run
 
 ```console
-$ npm install
 $ npm start
 ```
 
@@ -33,6 +31,7 @@ $ npm start
 
 it is only needed if you want to change default settings. it has the following properties:
 
+- `compress`: boolean, set to false to disable any compression
 - `gzip_level`: compression level, 0-9, default is 9
 - `log_verbose`: boolean, set true for more verbose logging or run with -v
 - `path_aliases`: object where the key is the url path and the value is the file path
@@ -45,6 +44,7 @@ it is only needed if you want to change default settings. it has the following p
 - `type_dynamics`: dynamic file types, see [api](#api)
 - `type_mimes`: file type to mime type map (most common are already set, only overrides)
 - `type_raws`: array of file types that are sent uncompressed
+- `zstd_level`: compression level for zstd, 0-19, default is 3
 
 here is an example for a customized setup:
 

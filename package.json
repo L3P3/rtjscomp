@@ -1,6 +1,6 @@
 {
 	"name": "rtjscomp",
-	"version": "0.9.6",
+	"version": "0.9.7",
 	"description": "php-like server but with javascript",
 	"repository": {
 		"type": "git",
@@ -8,11 +8,6 @@
 	},
 	"bugs": {
 		"url": "https://github.com/L3P3/rtjscomp/issues"
-	},
-	"dependencies": {
-		"ipware": "latest",
-		"parse-multipart-data": "latest",
-		"querystring": "latest"
 	},
 	"scripts": {
 		"start": "./rtjscomp.js",
