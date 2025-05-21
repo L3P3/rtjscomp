@@ -24,6 +24,7 @@ const HAS_BROTLI = zlib.createBrotliCompress != null;
 const HAS_ZSTD = zlib.createZstdCompress != null;
 const HTTP_LIST_REG = /,\s*/;
 const IMPORT_REG = /\bimport\(/g;
+const IPS_PRIVATE = /^(127\.|10\.|192\.168\.|::1|fc00:|fe80:)/;
 const IS_BUN = typeof Bun !== 'undefined';
 const LINENUMBER_REG = /:([0-9]+)[\):]/;
 const PATH_CONFIG = 'config/';
@@ -943,8 +944,10 @@ const querystring_parse = (querystring, result) => {
 		if (!key) {
 			throw 'key is empty';
 		}
-		value = decodeURIComponent(
-			(value || '').replace(PLUS_REG, ' ')
+		value = (
+			value != null
+			?	decodeURIComponent(value.replace(PLUS_REG, ' '))
+			:	'1'
 		);
 		if (key in result) {
 			if ((result[key] instanceof Array) !== array) {
@@ -966,7 +969,12 @@ const querystring_parse = (querystring, result) => {
 const request_handle = async (request, response, https) => {
 	const request_method = request.method;
 	const request_headers = request.headers;
-	const request_ip = request_headers['x-forwarded-for'] || request.socket.remoteAddress;
+	const request_ip = (
+		request_headers['x-forwarded-for']
+			?.split(HTTP_LIST_REG)
+			.findLast(addr => !IPS_PRIVATE.test(addr)) ||
+		request.socket.remoteAddress
+	);
 	const request_method_head = request_method === 'HEAD';
 
 	if ('x-forwarded-proto' in request_headers) {
@@ -1384,7 +1392,7 @@ const request_handle = async (request, response, https) => {
 						.filter(e => e[0] !== 'body')
 						.map(e => e[0] === 'password' ? [e[0], '***'] : e)
 						.map(e => e[0] === 'file' ? [e[0], '...'] : e)
-						.map(e => (typeof e[1] === 'object' && !e[1].length) ? [e[0], Object.keys(e[1]).slice(0, 20)] : e)
+						.map(e => (typeof e[1] === 'object' && e[1] !== null && !e[1].length) ? [e[0], Object.keys(e[1]).slice(0, 20)] : e)
 						.map(e => (e[0] !== 'user_agent' && typeof e[1] === 'string' && e[1].length > 20) ? [e[0], e[1].slice(0, 20) + '...'] : e)
 				)
 			]);

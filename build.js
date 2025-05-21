@@ -64,7 +64,6 @@ execSync(
 		'compilation_level SIMPLE',
 		'js /tmp/rtjscomp.js',
 		'js_output_file /tmp/rtjscomp.min.js',
-		'language_in ECMASCRIPT_2017',
 		'language_out ECMASCRIPT_2017',
 		'module_resolution NODE',
 		'rewrite_polyfills false',
