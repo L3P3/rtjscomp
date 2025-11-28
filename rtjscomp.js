@@ -19,6 +19,7 @@ const COMPRESS_METHOD_NONE = 0;
 const COMPRESS_METHOD_GZIP = 1;
 const COMPRESS_METHOD_BROTLI = 2;
 const COMPRESS_METHOD_ZSTD = 3;
+const COMPRESS_METHODS = ',gzip,brotli,zstd'.split(',');
 const GZIP_OPTIONS = {level: 9};
 const HAS_BROTLI = zlib.createBrotliCompress != null;
 const HAS_ZSTD = zlib.createZstdCompress != null;
@@ -308,7 +309,7 @@ const services_list_react = async list => {
 		start_queue.push(service_object);
 	}
 	await Promise.all(
-		start_queue.map(service_start)
+		start_queue.map(service_update)
 	);
 }
 const services_shutdown = () => (
@@ -325,7 +326,7 @@ const services_shutdown = () => (
 /**
 	(re)start service
 */
-const service_start = async service_object => {
+const service_update = async service_object => {
 	if (!services_loaded_promise) {
 		services_loaded_promise = new Promise(resolve => {
 			services_loaded_promise_resolve = resolve;
@@ -359,7 +360,7 @@ const service_start = async service_object => {
 				other.dependencies.includes(service_object)
 			) {
 				other.dependencies = null;
-				service_start(other);
+				service_update(other);
 			}
 			service_stop_inner(service_object);
 		}
@@ -382,7 +383,7 @@ const service_start = async service_object => {
 					timeout = setTimeout(() => (
 						log_verbose && log('file updated: ' + path),
 						service_object.file_function = null,
-						service_start(service_object)
+						service_update(service_object)
 					), 50)
 				));
 			}
@@ -548,7 +549,7 @@ const service_stop = async service_object => {
 	) {
 		other.dependencies = null;
 		if (other.status !== SERVICE_STATUS_STOPPING) {
-			service_start(other);
+			service_update(other);
 		}
 	}
 
@@ -984,6 +985,7 @@ const request_handle = async (request, response, https) => {
 	if (spam_enabled) spam('request', [https, request.url, request_ip]);
 
 	try {
+		response.setHeader('Server', 'l3p3 rtjscomp v' + VERSION);
 		const request_url_parsed = url.parse(request.url, false);
 
 		let path = request_url_parsed.pathname || '/';
@@ -1009,7 +1011,6 @@ const request_handle = async (request, response, https) => {
 			path_ghosts.has(path)
 		) return;
 
-		response.setHeader('Server', 'l3p3 rtjscomp v' + VERSION);
 		response.setHeader('Access-Control-Allow-Origin', '*');
 
 		let path_params = null;
@@ -1118,14 +1119,24 @@ const request_handle = async (request, response, https) => {
 
 			if (
 				path_hiddens.has(path) ||
-				path.endsWith('.service.js')
+				path.endsWith('.service.js') ||
+				(
+					file_stat = await (
+						fsp.stat(path_real)
+						.catch(() => {
+							throw 404;
+						})
+					)
+				).isDirectory()
 			) throw 403;
-			if (!fs.existsSync(path_real)) throw 404;
-			file_stat = fs.statSync(path_real);
-			if (file_stat.isDirectory()) throw 403;
 
 			if (file_dyn_enabled) { // compile file
-				const file_content = await fsp.readFile(path_real, 'utf8');
+				const file_content = await (
+					fsp.readFile(path_real, 'utf8')
+					.catch(() => {
+						throw 404;
+					})
+				);
 				try {
 					if (file_content.includes('\r')) {
 						throw 'illegal line break, must be unix';
@@ -1352,7 +1363,6 @@ const request_handle = async (request, response, https) => {
 					encodings.includes('zstd')
 				) {
 					file_compression = COMPRESS_METHOD_ZSTD;
-					response.setHeader('Content-Encoding', 'zstd');
 					if (!request_method_head) {
 						(
 							file_function_output = zlib.createZstdCompress(ZSTD_OPTIONS)
@@ -1364,7 +1374,6 @@ const request_handle = async (request, response, https) => {
 					encodings.includes('br')
 				) {
 					file_compression = COMPRESS_METHOD_BROTLI;
-					response.setHeader('Content-Encoding', 'br');
 					if (!request_method_head) {
 						(
 							file_function_output = zlib.createBrotliCompress()
@@ -1376,12 +1385,17 @@ const request_handle = async (request, response, https) => {
 					encodings.includes('gzip')
 				) {
 					file_compression = COMPRESS_METHOD_GZIP;
-					response.setHeader('Content-Encoding', 'gzip');
 					if (!request_method_head) {
 						(
 							file_function_output = zlib.createGzip(GZIP_OPTIONS)
 						).pipe(response);
 					}
+				}
+				if (file_compression > COMPRESS_METHOD_NONE) {
+					response.setHeader(
+						'Content-Encoding',
+						COMPRESS_METHODS[file_compression]
+					);
 				}
 			}
 
@@ -1455,11 +1469,16 @@ const request_handle = async (request, response, https) => {
 						}ERROR!`);
 					}
 				}
-				else if (file_compression !== COMPRESS_METHOD_NONE) {
+				else if (file_compression > COMPRESS_METHOD_NONE) {
 					response.removeHeader('Content-Encoding');
 				}
-				if (typeof returned !== 'number') {
-					log(`[error] ${path}: invalid return type: ${typeof returned}`);
+				if (
+					typeof returned !== 'number' ||
+					err < 100 ||
+					err > 599 ||
+					err % 1 > 0
+				) {
+					log(`[error] ${path}: invalid status code: ${returned}`);
 					throw 500;
 				}
 				if (response.headersSent) {
@@ -1513,19 +1532,14 @@ const request_handle = async (request, response, https) => {
 				response.setHeader('Vary', 'Accept-Encoding');
 			}
 
-			switch (file_compression) {
-			case COMPRESS_METHOD_NONE:
+			if (file_compression === COMPRESS_METHOD_NONE) {
 				response.setHeader('Content-Length', file_stat.size);
-				break;
-			case COMPRESS_METHOD_GZIP:
-				response.setHeader('Content-Encoding', 'gzip');
-				break;
-			case COMPRESS_METHOD_BROTLI:
-				response.setHeader('Content-Encoding', 'br');
-				break;
-			case COMPRESS_METHOD_ZSTD:
-				response.setHeader('Content-Encoding', 'zstd');
-				break;
+			}
+			else {
+				response.setHeader(
+					'Content-Encoding',
+					COMPRESS_METHODS[file_compression]
+				);
 			}
 
 			if (request_method_head) {
@@ -1540,7 +1554,7 @@ const request_handle = async (request, response, https) => {
 	catch (err) {
 		// catch internal errors
 		if (typeof err !== 'number') {
-			console.error(err);
+			console.error('[internal error]', err);
 			err = 500;
 		}
 
