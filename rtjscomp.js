@@ -1527,85 +1527,77 @@ const request_handle = async (request, response, https) => {
 			}
 
 			if (spam_enabled) spam('static_send', [path, file_compression]);
-			response.setHeader('Cache-Control', 'public, max-age=31536000');
-			response.setHeader('Last-Modified', new Date(file_stat.mtimeMs).toUTCString());
 
-			// Check If-Modified-Since (time-based validation)
-			if ('if-modified-since' in request_headers) {
-				const if_modified_since = new Date(request_headers['if-modified-since']);
-				// Round mtime down to seconds for comparison (HTTP dates don't have millisecond precision)
-				if (!isNaN(if_modified_since) && Math.floor(file_stat.mtimeMs / 1000) * 1000 <= if_modified_since.getTime()) {
-					response.statusCode = 304;
-					response.end();
-					return;
-				}
-			}
 			if (compression_enabled_type) {
 				response.setHeader('Vary', 'Accept-Encoding');
 			}
+			response.setHeader('Cache-Control', 'public, max-age=31536000');
+			response.setHeader('Last-Modified', new Date(file_stat.mtimeMs).toUTCString());
 
-			// Handle Range requests only for uncompressed files
+			if (
+				'if-modified-since' in request_headers &&
+				file_stat.mtimeMs <= new Date(request_headers['if-modified-since'])
+			) {
+				response.statusCode = 304;
+				response.end();
+				return;
+			}
+
 			let range_start = 0;
 			let range_end = file_stat.size - 1;
 			let is_range_request = false;
 
-			if (
-				file_compression === COMPRESS_METHOD_NONE &&
-				'range' in request_headers &&
-				!request_method_head
-			) {
+			if (file_compression === COMPRESS_METHOD_NONE) {
 				response.setHeader('Accept-Ranges', 'bytes');
-				const range_header = request_headers['range'];
-				// Only single range requests supported (not multipart ranges)
-				const range_match = range_header.match(/^bytes=(\d*)-(\d*)$/);
-				
-				if (range_match) {
-					const start = range_match[1];
-					const end = range_match[2];
-					
-					if (start || end) {
-						is_range_request = true;
-						
-						if (start && end) {
-							// Both start and end specified: bytes=10-20
-							range_start = parseInt(start, 10);
-							range_end = parseInt(end, 10);
-						} else if (start) {
-							// Only start specified: bytes=10-
-							range_start = parseInt(start, 10);
-							range_end = file_stat.size - 1;
-						} else {
-							// Only end specified (suffix-byte-range): bytes=-500
-							const suffix_length = parseInt(end, 10);
-							range_start = Math.max(0, file_stat.size - suffix_length);
-							range_end = file_stat.size - 1;
-						}
-						
-						// Validate range
-						if (
-							range_end >= file_stat.size ||
-							range_start > range_end
-						) {
+				if (
+					!request_method_head &&
+					'range' in request_headers
+				) {
+					const range_match = request_headers['range'].match(/^bytes=(\d*)-(\d*)$/);
+					if (range_match) {
+						const start = range_match[1];
+						const end = range_match[2];
+						if (start || end) {
+							is_range_request = true;
+
+							if (start && end) {
+								range_start = parseInt(start);
+								range_end = parseInt(end);
+							}
+							else if (start) {
+								range_start = parseInt(start);
+								range_end = file_stat.size - 1;
+							}
+							else {
+								const suffix_length = parseInt(end);
+								range_start = Math.max(0, file_stat.size - suffix_length);
+								range_end = file_stat.size - 1;
+							}
+
+							if (
+								range_start > range_end ||
+								range_end >= file_stat.size
+							) {
+								response.setHeader(
+									'Content-Range',
+									`bytes */${file_stat.size}`
+								);
+								throw 416;
+							}
+
+							response.statusCode = 206;
+							response.setHeader('Content-Length', range_end - range_start + 1);
 							response.setHeader(
 								'Content-Range',
-								`bytes */${file_stat.size}`
+								`bytes ${range_start}-${range_end}/${file_stat.size}`
 							);
-							throw 416;
 						}
-						
-						response.statusCode = 206;
-						response.setHeader(
-							'Content-Range',
-							`bytes ${range_start}-${range_end}/${file_stat.size}`
-						);
-						response.setHeader('Content-Length', range_end - range_start + 1);
 					}
 				}
 			}
 
 			if (!is_range_request) {
 				if (file_compression === COMPRESS_METHOD_NONE) {
-					response.setHeader('Accept-Ranges', 'bytes');
 					response.setHeader('Content-Length', file_stat.size);
 				}
 				else {
