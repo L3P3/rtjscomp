@@ -1526,31 +1526,16 @@ const request_handle = async (request, response, https) => {
 				}
 			}
 
-			// Generate ETag from modification time and file size
+			// Generate Last-Modified header from file modification time
 			const mtime_ms = file_stat.mtimeMs;
-			const etag = `"${mtime_ms.toString(36)}-${file_stat.size.toString(36)}"`;
 			const last_modified = new Date(mtime_ms).toUTCString();
 
-			// Check If-None-Match (ETag validation)
-			if ('if-none-match' in request_headers) {
-				const if_none_match = request_headers['if-none-match'];
-				if (if_none_match === etag || if_none_match === '*') {
-					response.setHeader('ETag', etag);
-					response.setHeader('Cache-Control', 'public, max-age=31536000');
-					throw 304;
-				}
-			}
-
 			// Check If-Modified-Since (time-based validation)
-			if (
-				'if-modified-since' in request_headers &&
-				!('if-none-match' in request_headers)
-			) {
+			if ('if-modified-since' in request_headers) {
 				const if_modified_since = new Date(request_headers['if-modified-since']);
 				// Round mtime down to seconds for comparison (HTTP dates don't have millisecond precision)
 				const mtime_seconds = Math.floor(mtime_ms / 1000) * 1000;
 				if (!isNaN(if_modified_since) && mtime_seconds <= if_modified_since.getTime()) {
-					response.setHeader('ETag', etag);
 					response.setHeader('Last-Modified', last_modified);
 					response.setHeader('Cache-Control', 'public, max-age=31536000');
 					throw 304;
@@ -1559,7 +1544,6 @@ const request_handle = async (request, response, https) => {
 
 			if (spam_enabled) spam('static_send', [path, file_compression]);
 			response.setHeader('Cache-Control', 'public, max-age=31536000');
-			response.setHeader('ETag', etag);
 			response.setHeader('Last-Modified', last_modified);
 			if (compression_enabled_type) {
 				response.setHeader('Vary', 'Accept-Encoding');
