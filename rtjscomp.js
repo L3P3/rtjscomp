@@ -1607,21 +1607,11 @@ const request_handle = async (request, response, https) => {
 			if (request_method_head) {
 				response.end();
 			}
-			else if (is_range_request) {
-				const stream = fs.createReadStream(path_real_send, {
-					start: range_start,
-					end: range_end
-				});
-				stream.on('error', err => {
-					log(`[error] ${path} stream: ${err.message}`);
-					if (!response.headersSent) {
-						throw 500;
-					}
-				});
-				stream.pipe(response);
-			}
 			else {
-				const stream = fs.createReadStream(path_real_send);
+				const stream = fs.createReadStream(
+					path_real_send,
+					is_range_request ? {start: range_start, end: range_end} : {}
+				);
 				stream.on('error', err => {
 					log(`[error] ${path} stream: ${err.message}`);
 					if (!response.headersSent) {
