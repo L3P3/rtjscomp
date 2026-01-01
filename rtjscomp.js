@@ -1544,6 +1544,7 @@ const request_handle = async (request, response, https) => {
 			) {
 				response.setHeader('Accept-Ranges', 'bytes');
 				const range_header = request_headers['range'];
+				// Only single range requests supported (not multipart ranges)
 				const range_match = range_header.match(/^bytes=(\d*)-(\d*)$/);
 				
 				if (range_match) {
@@ -1570,7 +1571,6 @@ const request_handle = async (request, response, https) => {
 						
 						// Validate range
 						if (
-							range_start < 0 ||
 							range_end >= file_stat.size ||
 							range_start > range_end
 						) {
@@ -1608,14 +1608,27 @@ const request_handle = async (request, response, https) => {
 				response.end();
 			}
 			else if (is_range_request) {
-				fs.createReadStream(path_real_send, {
+				const stream = fs.createReadStream(path_real_send, {
 					start: range_start,
 					end: range_end
-				}).pipe(response);
+				});
+				stream.on('error', err => {
+					log(`[error] ${path} stream: ${err.message}`);
+					if (!response.headersSent) {
+						throw 500;
+					}
+				});
+				stream.pipe(response);
 			}
 			else {
-				fs.createReadStream(path_real_send)
-					.pipe(response);
+				const stream = fs.createReadStream(path_real_send);
+				stream.on('error', err => {
+					log(`[error] ${path} stream: ${err.message}`);
+					if (!response.headersSent) {
+						throw 500;
+					}
+				});
+				stream.pipe(response);
 			}
 		}
 	}
