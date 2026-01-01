@@ -1526,25 +1526,20 @@ const request_handle = async (request, response, https) => {
 				}
 			}
 
-			// Generate Last-Modified header from file modification time
-			const mtime_ms = file_stat.mtimeMs;
-			const last_modified = new Date(mtime_ms).toUTCString();
+			if (spam_enabled) spam('static_send', [path, file_compression]);
+			response.setHeader('Cache-Control', 'public, max-age=31536000');
+			response.setHeader('Last-Modified', new Date(file_stat.mtimeMs).toUTCString());
 
 			// Check If-Modified-Since (time-based validation)
 			if ('if-modified-since' in request_headers) {
 				const if_modified_since = new Date(request_headers['if-modified-since']);
 				// Round mtime down to seconds for comparison (HTTP dates don't have millisecond precision)
-				const mtime_seconds = Math.floor(mtime_ms / 1000) * 1000;
-				if (!isNaN(if_modified_since) && mtime_seconds <= if_modified_since.getTime()) {
-					response.setHeader('Last-Modified', last_modified);
-					response.setHeader('Cache-Control', 'public, max-age=31536000');
-					throw 304;
+				if (!isNaN(if_modified_since) && Math.floor(file_stat.mtimeMs / 1000) * 1000 <= if_modified_since.getTime()) {
+					response.statusCode = 304;
+					response.end();
+					return;
 				}
 			}
-
-			if (spam_enabled) spam('static_send', [path, file_compression]);
-			response.setHeader('Cache-Control', 'public, max-age=31536000');
-			response.setHeader('Last-Modified', last_modified);
 			if (compression_enabled_type) {
 				response.setHeader('Vary', 'Accept-Encoding');
 			}
@@ -1654,22 +1649,15 @@ const request_handle = async (request, response, https) => {
 		}
 
 		if (!response.headersSent) {
-			if (err === 304) {
-				// 304 Not Modified - headers already set, just send status
-				response.statusCode = 304;
-				response.end();
-			}
-			else {
-				response.writeHead(err, {
-					'Content-Type': 'text/html',
-					'Cache-Control': 'no-cache, no-store',
-				});
-				response.end(`<!DOCTYPE html><html><body><h1>HTTP ${
-					err
-				}: ${
-					http.STATUS_CODES[err] || 'Error'
-				}</h1></body></html>`);
-			}
+			response.writeHead(err, {
+				'Content-Type': 'text/html',
+				'Cache-Control': 'no-cache, no-store',
+			});
+			response.end(`<!DOCTYPE html><html><body><h1>HTTP ${
+				err
+			}: ${
+				http.STATUS_CODES[err] || 'Error'
+			}</h1></body></html>`);
 		}
 		if ('content-length' in request_headers) {
 			request.socket.destroy();
