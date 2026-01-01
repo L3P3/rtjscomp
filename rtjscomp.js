@@ -1532,22 +1532,93 @@ const request_handle = async (request, response, https) => {
 				response.setHeader('Vary', 'Accept-Encoding');
 			}
 
-			if (file_compression === COMPRESS_METHOD_NONE) {
-				response.setHeader('Content-Length', file_stat.size);
+			// Handle Range requests only for uncompressed files
+			let range_start = 0;
+			let range_end = file_stat.size - 1;
+			let is_range_request = false;
+
+			if (
+				file_compression === COMPRESS_METHOD_NONE &&
+				'range' in request_headers &&
+				!request_method_head
+			) {
+				response.setHeader('Accept-Ranges', 'bytes');
+				const range_header = request_headers['range'];
+				// Only single range requests supported (not multipart ranges)
+				const range_match = range_header.match(/^bytes=(\d*)-(\d*)$/);
+				
+				if (range_match) {
+					const start = range_match[1];
+					const end = range_match[2];
+					
+					if (start || end) {
+						is_range_request = true;
+						
+						if (start && end) {
+							// Both start and end specified: bytes=10-20
+							range_start = parseInt(start, 10);
+							range_end = parseInt(end, 10);
+						} else if (start) {
+							// Only start specified: bytes=10-
+							range_start = parseInt(start, 10);
+							range_end = file_stat.size - 1;
+						} else {
+							// Only end specified (suffix-byte-range): bytes=-500
+							const suffix_length = parseInt(end, 10);
+							range_start = Math.max(0, file_stat.size - suffix_length);
+							range_end = file_stat.size - 1;
+						}
+						
+						// Validate range
+						if (
+							range_end >= file_stat.size ||
+							range_start > range_end
+						) {
+							response.setHeader(
+								'Content-Range',
+								`bytes */${file_stat.size}`
+							);
+							throw 416;
+						}
+						
+						response.statusCode = 206;
+						response.setHeader(
+							'Content-Range',
+							`bytes ${range_start}-${range_end}/${file_stat.size}`
+						);
+						response.setHeader('Content-Length', range_end - range_start + 1);
+					}
+				}
 			}
-			else {
-				response.setHeader(
-					'Content-Encoding',
-					COMPRESS_METHODS[file_compression]
-				);
+
+			if (!is_range_request) {
+				if (file_compression === COMPRESS_METHOD_NONE) {
+					response.setHeader('Accept-Ranges', 'bytes');
+					response.setHeader('Content-Length', file_stat.size);
+				}
+				else {
+					response.setHeader(
+						'Content-Encoding',
+						COMPRESS_METHODS[file_compression]
+					);
+				}
 			}
 
 			if (request_method_head) {
 				response.end();
 			}
 			else {
-				fs.createReadStream(path_real_send)
-					.pipe(response);
+				const stream = fs.createReadStream(
+					path_real_send,
+					is_range_request ? {start: range_start, end: range_end} : {}
+				);
+				stream.on('error', err => {
+					log(`[error] ${path} stream: ${err.message}`);
+					if (!response.headersSent) {
+						throw 500;
+					}
+				});
+				stream.pipe(response);
 			}
 		}
 	}
