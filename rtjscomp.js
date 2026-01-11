@@ -1474,9 +1474,9 @@ const request_handle = async (request, response, https) => {
 				}
 				if (
 					typeof returned !== 'number' ||
-					err < 100 ||
-					err > 599 ||
-					err % 1 > 0
+					returned < 100 ||
+					returned > 599 ||
+					returned % 1 > 0
 				) {
 					log(`[error] ${path}: invalid status code: ${returned}`);
 					throw 500;
