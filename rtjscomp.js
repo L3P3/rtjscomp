@@ -9,7 +9,7 @@
 
 // node libs
 const fs = require('fs');
-const fsp = require('fs/promises');
+const fsp = fs.promises;
 const http = require('http');
 const url = require('url');
 const zlib = require('zlib');
@@ -969,14 +969,17 @@ const querystring_parse = (querystring, result) => {
 
 const request_handle = async (request, response, https) => {
 	const request_method = request.method;
+	const request_method_head = request_method === 'HEAD';
 	const request_headers = request.headers;
 	const request_ip = (
-		request_headers['x-forwarded-for']
-			?.split(HTTP_LIST_REG)
-			.findLast(addr => !IPS_PRIVATE.test(addr)) ||
+		('x-forwarded-for' in request_headers) && (
+			request_headers['x-forwarded-for']
+			.split(HTTP_LIST_REG)
+			.reverse()
+			.find(addr => !IPS_PRIVATE.test(addr))
+		) ||
 		request.socket.remoteAddress
 	);
-	const request_method_head = request_method === 'HEAD';
 
 	if ('x-forwarded-proto' in request_headers) {
 		https = request_headers['x-forwarded-proto'] === 'https';
@@ -1076,7 +1079,7 @@ const request_handle = async (request, response, https) => {
 		) {
 			if (!file_dyn_enabled) throw 405;
 			if ('content-length' in request_headers) {
-				const content_length = Number(request_headers['content-length']);
+				const content_length = parseInt(request_headers['content-length']);
 				if (
 					isNaN(content_length) ||
 					content_length < 0 ||
@@ -1698,7 +1701,7 @@ process.on('SIGTERM', actions.exit);
 log(`rtjscomp v${
 	VERSION
 } in ${
-	IS_BUN ? 'bun' : 'node'
+	IS_BUN ? 'bun v' + Bun.version : 'node ' + process.version
 } on ${
 	process.platform
 		.replace('win32', 'windows')
@@ -1787,13 +1790,13 @@ await file_keep_new(PATH_CONFIG + 'init.js', async data => {
 			json['path_aliases'] = parse_old_map(old_path_aliases);
 		}
 		if (old_port_http) {
-			const number = Number(old_port_http);
+			const number = parseInt(old_port_http);
 			if (!isNaN(number)) {
 				json['port_http'] = number;
 			}
 		}
 		if (old_port_https) {
-			const number = Number(old_port_https);
+			const number = parseInt(old_port_https);
 			if (!isNaN(number)) {
 				json['port_https'] = number;
 			}

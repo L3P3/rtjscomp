@@ -3,6 +3,7 @@ config/
 data/
 node_modules/
 build.js
+externs.js
 changes_before_git.txt
 package-lock.json
 rtjscomp.json

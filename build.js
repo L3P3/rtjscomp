@@ -42,6 +42,10 @@ let code = (await readFile('rtjscomp.js', 'utf8'))
 	.replace(
 		'await import(',
 		'await import_hiddenfromgcc('
+	)
+	.replaceAll(
+		'parseInt(',
+		'parseInt_hiddenfromgcc('
 	);
 
 let name_count = 0;
@@ -62,6 +66,7 @@ execSync(
 	GCC_COMMAND +
 	[
 		'compilation_level SIMPLE',
+		'externs externs.js',
 		'js /tmp/rtjscomp.js',
 		'js_output_file /tmp/rtjscomp.min.js',
 		'language_out ECMASCRIPT_2017',
@@ -82,6 +87,10 @@ await writeFile(
 	.replace(
 		'await import_hiddenfromgcc(',
 		'await import('
+	)
+	.replaceAll(
+		'parseInt_hiddenfromgcc(',
+		'parseInt('
 	),
 	'ascii'
 );
