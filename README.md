@@ -120,7 +120,7 @@ in both file types (dynamic served and services), you can use all node/bun metho
 
 ## supported environments
 
-- node 8.0.0 or higher
+- node v10.1.0 or higher
 - bun
 
 any os
