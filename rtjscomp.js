@@ -749,6 +749,9 @@ actions.log_clear = () => {
 }
 const log = rtjscomp.log = msg => (
 	console.log(msg),
+	log_history.length > 1e6 && (
+		log_history = log_history.slice(-1e3)
+	),
 	log_history.push(msg),
 	spam_enabled ? spam('log', [msg]) : undefined
 )
@@ -1006,13 +1009,18 @@ const request_handle = async (request, response, https) => {
 		}
 		path = path.slice(1);
 
-		// ignore (timeout) many hack attempts
+		// ignore (tarpit) many hack attempts
 		if (
 			path.includes('php') ||
 			path.includes('sql') ||
 			path.includes('.git/') ||
 			path_ghosts.has(path)
-		) return;
+		) {
+			request.socket.setTimeout(1e4, () => {
+				request.socket.destroy();
+			});
+			return;
+		}
 
 		response.setHeader('Access-Control-Allow-Origin', '*');
 
