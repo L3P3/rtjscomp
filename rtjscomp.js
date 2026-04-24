@@ -334,7 +334,7 @@ const service_update = async service_object => {
 	}
 	const {path} = service_object;
 	if (log_verbose) log(path + ': prepare for (re)start');
-	let start_interval = 0;
+	let watchdog_interval = 0;
 	try {
 		// if service is running, stop it
 		if (
@@ -451,8 +451,9 @@ const service_update = async service_object => {
 
 		log('start service: ' + path);
 		service_object.status = SERVICE_STATUS_STARTING;
-		start_interval = setInterval(() => {
-			log(`[warning] ${path}: still starting`);
+		let watchdog_counter = 0;
+		watchdog_interval = setInterval(() => {
+			log(`[warning] ${path}: starting over ${++watchdog_counter * 5} seconds`);
 		}, 5e3);
 		const content_object = service_object.content = {};
 		const result = await service_object.file_function.call(
@@ -498,7 +499,7 @@ const service_update = async service_object => {
 		return;
 	}
 	finally {
-		clearInterval(start_interval);
+		clearInterval(watchdog_interval);
 		service_object.promise_deps =
 		service_object.promise_deps_resolve = null;
 		if (service_object.status !== SERVICE_STATUS_ACTIVE) {
@@ -572,8 +573,9 @@ const service_stop_inner = async service_object => {
 	} = service_object;
 	if (handler_stop) {
 		service_object.handler_stop = null;
-		const stop_interval = setInterval(() => {
-			log(`[warning] ${path}: still stopping`);
+		let watchdog_counter = 0;
+		const watchdog_interval = setInterval(() => {
+			log(`[warning] ${path}: stopping over ${++watchdog_counter} seconds`);
 		}, 1e3);
 		try {
 			await handler_stop();
@@ -588,7 +590,7 @@ const service_stop_inner = async service_object => {
 			}`);
 			service_object.status = SERVICE_STATUS_FAILED;
 		}
-		clearInterval(stop_interval);
+		clearInterval(watchdog_interval);
 	}
 	service_object.promise_stopped_resolve();
 }
@@ -1432,6 +1434,10 @@ const request_handle = async (request, response, https) => {
 			await services_loaded_promise;
 
 			let returned;
+			let watchdog_counter = 0;
+			const watchdog_interval = setInterval(() => {
+				log(`[warning] ${path}: running over ${++watchdog_counter * 5} seconds`);
+			}, 5e3);
 			try {
 				returned = await file_function(
 					file_function_input,
@@ -1462,6 +1468,7 @@ const request_handle = async (request, response, https) => {
 					returned = 500;
 				}
 			}
+			clearInterval(watchdog_interval);
 			if (request_method_head) {
 				delete file_function_output.write;
 				delete file_function_output.end;
