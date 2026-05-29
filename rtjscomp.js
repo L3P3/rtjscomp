@@ -131,29 +131,6 @@ if (!Object.fromEntries) {
 	}
 }
 
-// workaround for bun: https://github.com/oven-sh/bun/issues/18919
-let fs_watch = fs.watch;
-if (IS_BUN) {
-	const fs_watch_original = fs_watch;
-	const watch_callbacks = new Map;
-	fs_watch = (path, options, callback) => {
-		if (!watch_callbacks.has(path)) {
-			fs_watch_original(path, options, () => {
-				const callback = watch_callbacks.get(path);
-				if (callback) {
-					callback();
-				}
-			});
-		}
-		watch_callbacks.set(path, callback);
-		return {
-			close: () => (
-				watch_callbacks.set(path, null)
-			),
-		};
-	}
-}
-
 // legacy, will be removed soon!
 global.globals = rtjscomp;
 global.actions = rtjscomp.actions;
@@ -378,7 +355,7 @@ const service_update = async service_object => {
 			if (service_object.status !== SERVICE_STATUS_PENDING) return;
 			if (!service_object.watcher) {
 				let timeout = 0;
-				service_object.watcher = fs_watch(path_real, WATCH_OPTIONS, () => (
+				service_object.watcher = fs.watch(path_real, WATCH_OPTIONS, () => (
 					clearTimeout(timeout),
 					timeout = setTimeout(() => (
 						log_verbose && log('file updated: ' + path),
@@ -613,7 +590,7 @@ const service_require_try = path => {
 }
 
 const file_watch_once = (path, callback) => {
-	const watcher = fs_watch(path, WATCH_OPTIONS, () => (
+	const watcher = fs.watch(path, WATCH_OPTIONS, () => (
 		watcher.close(),
 		log_verbose && log('file updated: ' + path),
 		callback()
@@ -631,7 +608,7 @@ const file_keep_new = async (path, callback) => {
 	}
 
 	let timeout = 0;
-	return fs_watch(path, WATCH_OPTIONS, () => (
+	return fs.watch(path, WATCH_OPTIONS, () => (
 		clearTimeout(timeout),
 		timeout = setTimeout(() => exiting || (
 			log_verbose && log('file updated: ' + path),
