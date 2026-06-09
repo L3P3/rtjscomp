@@ -29,8 +29,8 @@ const IPS_PRIVATE = /^(127\.|10\.|192\.168\.|::1|fc00:|fe80:)/;
 const IS_BUN = typeof Bun !== 'undefined';
 const LINENUMBER_REG = /:([0-9]+)[\):]/;
 const PATH_CONFIG = 'config/';
-const PATH_DATA = 'data/';
-const PATH_PUBLIC = 'public/';
+const PATH_DATA = (process.env.rtjscomp_path_data || 'data') + '/';
+const PATH_PUBLIC = (process.env.rtjscomp_path_public || 'public') + '/';
 const PLUS_REG = /\+/g;
 const RESOLVE_OPTIONS = {paths: [require('path').resolve()]};
 const SERVICE_REQUIRE_REG = /\bservice_require\(([^)]*)\)/g;
@@ -1022,14 +1022,24 @@ const request_handle = async (request, response, https) => {
 			template: for (const template of templates) {
 				const template_path = template.path_split;
 				const template_path_length = template_path.length;
-				if (template_path_length !== path_split.length) continue;
+				if (
+					template_path_length > path_split.length ||
+					template_path_length < path_split.length &&
+					template_path[template_path_length - 1] !== '**'
+				) continue;
 				const params = {};
 				for (let i = 0; i < template_path_length; ++i) {
 					if (template_path[i].charCodeAt(0) === 42) {
 						if (template_path[i].length > 1) {
-							params[
-								template_path[i].slice(1)
-							] = path_split[i];
+							if (template_path[i].charCodeAt(1) === 42) {
+								params.path_match = path_split.slice(i).join('/');
+								break;
+							}
+							else {
+								params[
+									template_path[i].slice(1)
+								] = path_split[i];
+							}
 						}
 					}
 					else if (template_path[i] !== path_split[i]) {
@@ -1918,6 +1928,7 @@ await file_keep_new('rtjscomp.json', data => {
 			throw 'must contain {}';
 		}
 
+		// read+validate
 		const compression_enabled_new = get_prop_bool(data, 'compress', true);
 		const gzip_level_new = get_prop_uint(data, 'gzip_level', 3);
 		const log_verbose_new = get_prop_bool(data, 'log_verbose', log_verbose_flag);
@@ -1934,6 +1945,7 @@ await file_keep_new('rtjscomp.json', data => {
 		const upload_limit_new = get_prop_uint(data, 'upload_limit', 10);
 		const zstd_level_new = get_prop_uint(data, 'zstd_level', 3);
 
+		// validate
 		if (data) {
 			const keys_left = Object.keys(data);
 			if (keys_left.length > 0) {
@@ -1943,49 +1955,68 @@ await file_keep_new('rtjscomp.json', data => {
 		if (gzip_level_new > 9) {
 			throw 'gzip_level > 9';
 		}
+		if (path_aliases_new) {
+			for (const [key, value] of path_aliases_new) {
+				config_path_check(key, true);
+				config_path_check(value);
+				if (key.includes('*')) {
+					const path_split = key.split('/');
+					if (
+						path_split.includes('**') &&
+						path_split.indexOf('**') !== path_split.length - 1
+					) {
+						throw '** only allowed at path end';
+					}
+					for (const part of path_split) {
+						if (
+							part !== '**' &&
+							part.indexOf('*', 1) > 0
+						) {
+							throw '* only allowed at path segment start';
+						}
+					}
+				}
+			}
+		}
+		if (path_ghosts_new) {
+			for (const key of path_ghosts_new) {
+				config_path_check(key, true);
+			}
+		}
+		if (path_hiddens_new) {
+			for (const key of path_hiddens_new) {
+				config_path_check(key, true);
+			}
+		}
+		if (path_statics_new) {
+			for (const key of path_statics_new) {
+				config_path_check(key, true);
+			}
+		}
 		if (
 			port_http_new > 65535 ||
 			port_https_new > 65535
 		) {
 			throw 'port > 65535';
 		}
+		for (const key of services_new) {
+			config_path_check(key);
+		}
 		if (zstd_level_new > 19) {
 			throw 'zstd_level > 19';
 		}
 
+		// apply
 		compression_enabled = compression_enabled_new;
 		GZIP_OPTIONS.level = compression_enabled ? gzip_level_new : 0;
 		ZSTD_OPTIONS.params[ZSTD_c_compressionLevel] = zstd_level_new;
 		log_verbose = log_verbose_new;
 		upload_limit = upload_limit_new * 1024 * 1024;
-		if (path_ghosts_new) {
-			path_ghosts.clear();
-			for (const key of path_ghosts_new) {
-				config_path_check(key);
-				path_ghosts.add(key);
-			}
-		}
-		if (path_hiddens_new) {
-			path_hiddens.clear();
-			for (const key of path_hiddens_new) {
-				config_path_check(key);
-				path_hiddens.add(key);
-			}
-		}
-		if (path_statics_new) {
-			path_statics.clear();
-			for (const key of path_statics_new) {
-				config_path_check(key);
-				path_statics.add(key);
-			}
-		}
 		if (path_aliases_new) {
 			path_aliases.clear();
 			path_aliases_reverse.clear();
 			path_aliases_templates.clear();
 			for (const [key, value] of path_aliases_new) {
-				config_path_check(key, true);
-				config_path_check(value);
 				if (key.includes('*')) {
 					const path_split = key.split('/');
 					const first = path_split.shift();
@@ -2012,6 +2043,24 @@ await file_keep_new('rtjscomp.json', data => {
 				}
 			}
 		}
+		if (path_ghosts_new) {
+			path_ghosts.clear();
+			for (const key of path_ghosts_new) {
+				path_ghosts.add(key);
+			}
+		}
+		if (path_hiddens_new) {
+			path_hiddens.clear();
+			for (const key of path_hiddens_new) {
+				path_hiddens.add(key);
+			}
+		}
+		if (path_statics_new) {
+			path_statics.clear();
+			for (const key of path_statics_new) {
+				path_statics.add(key);
+			}
+		}
 		if (type_dynamics_new) {
 			type_dynamics.clear();
 			for (const key of type_dynamics_new) {
@@ -2019,6 +2068,7 @@ await file_keep_new('rtjscomp.json', data => {
 			}
 		}
 		if (type_mimes_new) {
+			// we keep old keys, only override
 			for (const [key, value] of type_mimes_new) {
 				type_mimes.set(key, value);
 			}
@@ -2030,7 +2080,6 @@ await file_keep_new('rtjscomp.json', data => {
 			}
 		}
 
-		for (const path of services_new) config_path_check(path);
 		const promises = [
 			services_list_react(
 				services_new

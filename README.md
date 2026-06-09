@@ -118,6 +118,10 @@ in both file types (dynamic served and services), you can use all node/bun metho
   - `async data_load_watch(path, callback(content))`: executes callback first and on every change
   - `async data_save(path, content)`: writes the content to the file in data directory
 
+## environment variables
+- `rtjscomp_path_data`: path to data directory, default is `./data`
+- `rtjscomp_path_public`: path to public directory, default is `./public`
+
 ## supported environments
 
 - node v10.1.0 or higher
