@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
-	@preserve RTJSCOMP by L3P3, 2017-2025
+	@preserve RTJSCOMP by L3P3, 2017-2026
 */
 
 "use strict";
@@ -1032,13 +1032,14 @@ const request_handle = async (request, response, https) => {
 
 		let path_params = null;
 		let request_body_promise = null;
+		let hashmap_lookup;
 
 		if (path_aliases_reverse.has(path)) {
 			response.setHeader('Location', path_aliases_reverse.get(path));
 			throw 301;
 		}
-		if (path_aliases.has(path)) {
-			path = path_aliases.get(path)
+		if ((hashmap_lookup = path_aliases.get(path)) != null) {
+			path = hashmap_lookup;
 		}
 		else { // aliases with *
 			const path_split = path.split('/');
@@ -1133,9 +1134,9 @@ const request_handle = async (request, response, https) => {
 
 		if (
 			file_dyn_enabled &&
-			file_cache_functions.has(path)
+			(hashmap_lookup = file_cache_functions.get(path)) != null
 		) {
-			file_function = file_cache_functions.get(path);
+			file_function = hashmap_lookup;
 		}
 		else {
 			if (log_verbose) log(`load ${
