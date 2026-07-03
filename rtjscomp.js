@@ -66,8 +66,6 @@ const path_aliases_reverse = new Map([
 	['index.html', '/'],
 ]);
 const path_aliases_templates = new Map;
-/// files where requests should be totally ignored
-const path_ghosts = new Set;
 /// hidden files
 const path_hiddens = new Set;
 /// forced static files
@@ -1005,19 +1003,6 @@ const request_handle = async (request, response, https) => {
 		}
 		path = path.slice(1);
 
-		// ignore (tarpit) many hack attempts
-		if (
-			path.includes('php') ||
-			path.includes('sql') ||
-			path.includes('.git/') ||
-			path_ghosts.has(path)
-		) {
-			request.socket.setTimeout(1e4, () => {
-				request.socket.destroy();
-			});
-			return;
-		}
-
 		response.setHeader('Access-Control-Allow-Origin', '*');
 
 		let path_params = null;
@@ -1756,7 +1741,7 @@ await file_keep_new(PATH_CONFIG + 'init.js', async data => {
 		fsp.stat(PATH_DATA).catch(_ => null),
 		fsp.stat(PATH_PUBLIC).catch(_ => null),
 		...(
-			'file_blocks,file_privates,file_raws,file_type_dyns,file_type_mimes,file_type_nocompress,path_aliases,port_http,port_https,services'
+			'file_privates,file_raws,file_type_dyns,file_type_mimes,file_type_nocompress,path_aliases,port_http,port_https,services'
 			.split(',')
 			.map(name => fsp.readFile(PATH_CONFIG + name + '.txt', 'utf8').catch(_ => null))
 		),
@@ -1780,7 +1765,6 @@ await file_keep_new(PATH_CONFIG + 'init.js', async data => {
 		) || {};
 
 		const [
-			old_file_blocks,
 			old_file_privates,
 			old_file_raws,
 			old_file_type_dyns,
@@ -1792,9 +1776,6 @@ await file_keep_new(PATH_CONFIG + 'init.js', async data => {
 			old_services,
 		] = files_config;
 
-		if (old_file_blocks) {
-			json['path_ghosts'] = parse_old_list(old_file_blocks);
-		}
 		if (old_file_privates) {
 			json['path_hiddens'] = parse_old_list(old_file_privates);
 		}
@@ -1955,7 +1936,6 @@ await file_keep_new('rtjscomp.json', data => {
 		const gzip_level_new = get_prop_uint(data, 'gzip_level', 3);
 		const log_verbose_new = get_prop_bool(data, 'log_verbose', log_verbose_flag);
 		const path_aliases_new = get_prop_map(data, 'path_aliases');
-		const path_ghosts_new = get_prop_list(data, 'path_ghosts');
 		const path_hiddens_new = get_prop_list(data, 'path_hiddens');
 		const path_statics_new = get_prop_list(data, 'path_statics');
 		const port_http_new = get_prop_uint(data, 'port_http', 8080);
@@ -1998,11 +1978,6 @@ await file_keep_new('rtjscomp.json', data => {
 						}
 					}
 				}
-			}
-		}
-		if (path_ghosts_new) {
-			for (const key of path_ghosts_new) {
-				config_path_check(key, true);
 			}
 		}
 		if (path_hiddens_new) {
@@ -2063,12 +2038,6 @@ await file_keep_new('rtjscomp.json', data => {
 						path_aliases_reverse.set(value, '/' + key);
 					}
 				}
-			}
-		}
-		if (path_ghosts_new) {
-			path_ghosts.clear();
-			for (const key of path_ghosts_new) {
-				path_ghosts.add(key);
 			}
 		}
 		if (path_hiddens_new) {

@@ -35,7 +35,6 @@ it is only needed if you want to change default settings. it has the following p
 - `gzip_level`: compression level, 0-9, default is 9
 - `log_verbose`: boolean, set true for more verbose logging or run with -v
 - `path_aliases`: object where the key is the url path and the value is the file path
-- `path_ghosts`: array of paths that are simply ignored, no response is sent
 - `path_hiddens`: array of paths that give 404
 - `path_statics`: array of paths in which nothing is transpiled, but the file is sent as is
 - `port_http`: port for http server, default is 8080
@@ -56,7 +55,6 @@ here is an example for a customized setup:
     "blog": "modules/blog/index.html",
     "blog/*id": "modules/blog/article.html"
   },
-  "path_ghosts": [ "admin", "wp-admin" ],
   "path_hiddens": [ "secrets.html" ],
   "path_statics": [ "rawtruth.html", "static" ],
   "port_http": 8080,
