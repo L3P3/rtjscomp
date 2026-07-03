@@ -23,6 +23,8 @@ const COMPRESS_METHODS = ',gzip,brotli,zstd'.split(',');
 const GZIP_OPTIONS = {level: 9};
 const HAS_BROTLI = zlib.createBrotliCompress != null;
 const HAS_ZSTD = zlib.createZstdCompress != null;
+const HTML_ESCAPE_REG = /[&<>"]/g;
+const HTML_ESCAPE_TEST_REG = /[&<>"]/;
 const HTTP_LIST_REG = /,\s*/;
 const IMPORT_REG = /\bimport\(/g;
 const IPS_PRIVATE = /^(127\.|10\.|192\.168\.|::1|fc00:|fe80:)/;
@@ -148,6 +150,13 @@ const rtjscomp = global.rtjscomp = {
 	actions,
 	version: VERSION,
 };
+const escape_html_char = char => (
+	char === '&' ? '&amp;' :
+	char === '<' ? '&lt;' :
+	char === '>' ? '&gt;' :
+	char === '"' ? '&quot;' :
+	char
+);
 
 // polyfills
 if (!Object.fromEntries) {
@@ -157,29 +166,6 @@ if (!Object.fromEntries) {
 		return object;
 	}
 }
-
-// legacy, will be removed soon!
-global.globals = rtjscomp;
-global.actions = rtjscomp.actions;
-global.data_load = name => {
-	log('[deprecated] synchronous load file: ' + PATH_DATA + name);
-	try {
-		return fs.readFileSync(PATH_DATA + name, 'utf8');
-	}
-	catch (err) {
-		return null;
-	}
-}
-global.data_save = (name, data) => (
-	log('[deprecated] synchronous save file: ' + PATH_DATA + name),
-	fs.writeFileSync(PATH_DATA + name, data, 'utf8')
-)
-global.number_check_int = number => (
-	Math.floor(number) === number
-)
-global.number_check_uint = number => (
-	number >= 0 && number_check_int(number)
-)
 
 rtjscomp.data_load = async name => {
 	if (log_verbose) log('load file: ' + PATH_DATA + name);
@@ -211,6 +197,11 @@ rtjscomp.data_save = (name, data) => (
 		'utf8'
 	)
 )
+rtjscomp.escape_html = str => (
+	HTML_ESCAPE_TEST_REG.test(str)
+	?	str.replace(HTML_ESCAPE_REG, escape_html_char)
+	:	str
+);
 
 /**
 	hack to guess the line number of an error
@@ -1182,7 +1173,7 @@ const request_handle = async (request, response, https) => {
 
 					let code = `const log=a=>rtjscomp.log(${
 						JSON.stringify(path + ': ')
-					}+a);`;
+					}+a),escape_html=rtjscomp.escape_html;`;
 
 					let section_dynamic = false;
 					let index_start = 0;
@@ -1202,28 +1193,28 @@ const request_handle = async (request, response, https) => {
 							section_dynamic = false;
 							// section not empty?
 							if (index_start < index_end) {
-								// `<?`?
-								if (file_content.charCodeAt(index_start) !== 61) {
-									code += (
-										file_content
-											.slice(
-												index_start,
-												index_end
-											)
-											.replace(IMPORT_REG, 'custom_import(') +
-										';'
-									);
+								let before = '';
+								let after = ';';
+								const first_char = file_content.charCodeAt(index_start);
+								if (first_char === 58) { // `<?:`?
+									++index_start;
+									before = 'output.write(escape_html(""+(';
+									after = ')));';
 								}
-								else { // `<?=`?
-									code += `output.write(''+(${
-										file_content
-											.slice(
-												++index_start,
-												index_end
-											)
-											.replace(IMPORT_REG, 'custom_import(')
-									}));`;
+								else if (first_char === 61) { // `<?=`?
+									++index_start;
+									before = 'output.write(""+(';
+									after = '));';
 								}
+
+								code += before + (
+									file_content
+										.slice(
+											index_start,
+											index_end
+										)
+										.replace(IMPORT_REG, 'custom_import(')
+								) + after;
 							}
 							// skip `?>`
 							index_end += 2;

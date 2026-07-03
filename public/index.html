@@ -1,6 +1,6 @@
 <!DOCTYPE html><?
 
-const code = Number(input.code || 42);
+const code = input.code || 42;
 // this is not php but javascript!!!!!!!!!!!!!
 // but for better syntax highlighting, set ide language to php.
 // open your local website and look into its source code. this script will be gone.
@@ -9,8 +9,8 @@ const code = Number(input.code || 42);
 <html>
 	<body>
 		<h1>Hello, World!</h1>
-		<p>Current reason: <?= code ?></p>
-		<p><a href="/?code=<?= code + 1 ?>">One more</a></p>
+		<p>Current reason: <?: code ?></p>
+		<p><a href="/?code=<?: code + 1 ?>">One more</a></p>
 		<p>See <a href="https://github.com/L3P3/rtjscomp">the readme</a>!</p>
 	</body>
 </html>
