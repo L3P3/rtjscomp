@@ -58,7 +58,7 @@ here is an example for a customized setup:
   },
   "path_ghosts": [ "admin", "wp-admin" ],
   "path_hiddens": [ "secrets.html" ],
-  "path_statics": [ "rawtruth.html" ],
+  "path_statics": [ "rawtruth.html", "static" ],
   "port_http": 8080,
   "services": [
     "modules/blog/blog",
