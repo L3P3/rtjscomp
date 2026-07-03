@@ -11,7 +11,6 @@
 const fs = require('fs');
 const fsp = fs.promises;
 const http = require('http');
-const url = require('url');
 const zlib = require('zlib');
 
 // constants
@@ -989,9 +988,9 @@ const request_handle = async (request, response, https) => {
 
 	try {
 		response.setHeader('Server', 'l3p3 rtjscomp v' + VERSION);
-		const request_url_parsed = url.parse(request.url, false);
+		const request_url_parsed = request.url.split('?');
 
-		let path = request_url_parsed.pathname || '/';
+		let path = request_url_parsed[0] || '/';
 		if (
 			path.charCodeAt(0) !== 47 ||
 			path.includes('//')
@@ -1086,7 +1085,8 @@ const request_handle = async (request, response, https) => {
 
 		const file_dyn_enabled = (
 			type_dynamics.has(file_type) &&
-			!path_statics.has(path)
+			!path_statics.has(path) &&
+			!path_statics.has(path.split('/', 1)[0])
 		);
 
 		if (
@@ -1314,9 +1314,12 @@ const request_handle = async (request, response, https) => {
 				}
 			}
 
-			if (request_url_parsed.query) {
+			if (request_url_parsed.length > 1) {
 				try {
-					querystring_parse(request_url_parsed.query, file_function_input);
+					querystring_parse(
+						request_url_parsed.slice(1).join('?'),
+						file_function_input
+					);
 				}
 				catch (err) {
 					log(`[error] ${path} request query: ${err}`);
@@ -1365,7 +1368,7 @@ const request_handle = async (request, response, https) => {
 				?	'get'
 				:	request_method.toLowerCase()
 			);
-			file_function_input['path'] = request_url_parsed.pathname;
+			file_function_input['path'] = request_url_parsed[0];
 			file_function_input['user_agent'] = request_headers['user-agent'];
 
 			let file_function_output = response;
