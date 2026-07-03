@@ -15,17 +15,13 @@ jobs:
     name: Build
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup NodeJS
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
+        uses: actions/checkout@main
       - name: Install Closure Compiler
         run: npm install --no-save google-closure-compiler
       - name: Build
         run: npm run build
       - name: Publish to npm
         if: github.ref == 'refs/heads/main'
-        uses: JS-DevTools/npm-publish@v3
+        uses: JS-DevTools/npm-publish@main
         with:
           token: ${{ secrets.NPM_TOKEN }}
