@@ -109,6 +109,7 @@ in every served dynamic file (like .html), you can insert `<?` and `?>` tags to 
 request-independent services can be created using .service.js files referenced in services.txt.
 in both file types (dynamic served and services), you can use all node/bun methods including `require`, but also those:
 
+- `escape_html(str)`: escapes html special characters
 - `log(msg)`: logs the message to the console
 - `service_require(service path)`: returns the matching service object
 - `service_require_try(service path)`: returns the matching service object or null if not found or if disabled
@@ -117,7 +118,6 @@ in both file types (dynamic served and services), you can use all node/bun metho
   - `async data_load(path)`: reads the file in data directory and returns its content or null
   - `async data_load_watch(path, callback(content))`: executes callback first and on every change
   - `async data_save(path, content)`: writes the content to the file in data directory
-  - `escape_html(str)`: escapes html special characters
 
 ## environment variables
 - `rtjscomp_path_data`: path to data directory, default is `./data`
