@@ -25,3 +25,11 @@ jobs:
         uses: JS-DevTools/npm-publish@main
         with:
           token: ${{ secrets.NPM_TOKEN }}
+      - name: Add git tag
+        if: github.ref == 'refs/heads/main'
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git tag -f "v$VERSION"
+          git push -f origin "v$VERSION"
