@@ -139,8 +139,9 @@ const type_raws = new Set([
 	'zip',
 ]);
 
-/// compiled file handlers
+/// state
 const file_cache_functions = new Map;
+const watch_callbacks = new Set;
 
 const actions = {};
 const rtjscomp = global.rtjscomp = {
@@ -199,6 +200,21 @@ rtjscomp.escape_html = str => (
 	?	str.replace(HTML_ESCAPE_REG, escape_html_char)
 	:	str
 );
+
+const file_watch = (path, callback) => {
+	watch_callbacks.add(callback);
+	const watcher = fs.watch(path, WATCH_OPTIONS, callback);
+	return {
+		close: () => {
+			watch_callbacks.delete(callback);
+			watcher.close();
+		},
+	};
+};
+actions.reload_force = () => {
+	log('force file reload');
+	for (const callback of watch_callbacks) callback();
+}
 
 /**
 	hack to guess the line number of an error
@@ -370,7 +386,7 @@ const service_update = async service_object => {
 			if (service_object.status !== SERVICE_STATUS_PENDING) return;
 			if (!service_object.watcher) {
 				let timeout = 0;
-				service_object.watcher = fs.watch(path_real, WATCH_OPTIONS, () => (
+				service_object.watcher = file_watch(path_real, () => (
 					clearTimeout(timeout),
 					timeout = setTimeout(() => (
 						log_verbose && log('file updated: ' + path),
@@ -605,7 +621,7 @@ const service_require_try = path => {
 }
 
 const file_watch_once = (path, callback) => {
-	const watcher = fs.watch(path, WATCH_OPTIONS, () => (
+	const watcher = file_watch(path, () => (
 		watcher.close(),
 		log_verbose && log('file updated: ' + path),
 		callback()
@@ -623,7 +639,7 @@ const file_keep_new = async (path, callback) => {
 	}
 
 	let timeout = 0;
-	return fs.watch(path, WATCH_OPTIONS, () => (
+	return file_watch(path, () => (
 		clearTimeout(timeout),
 		timeout = setTimeout(() => exiting || (
 			log_verbose && log('file updated: ' + path),
@@ -1706,6 +1722,7 @@ process.on('SIGINT', actions.exit);
 //process.on('SIGUSR1', actions.exit);
 process.on('SIGUSR2', actions.exit);
 process.on('SIGTERM', actions.exit);
+process.on('SIGHUP', actions.reload_force);
 
 log(`rtjscomp v${
 	VERSION

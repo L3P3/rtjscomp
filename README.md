@@ -112,10 +112,12 @@ in both file types (dynamic served and services), you can use all node/bun metho
 - `service_require(service path)`: returns the matching service object
 - `service_require_try(service path)`: returns the matching service object or null if not found or if disabled
 - `rtjscomp`: has these properties/methods:
-  - `actions`: an object with methods for server control (http[s]_[start|stop|kill], log_clear, halt, exit)
+  - `actions`: an object with methods for server control (http[s]_[start|stop|kill], log_clear, file_watch_force_all, halt, exit)
   - `async data_load(path)`: reads the file in data directory and returns its content or null
   - `async data_load_watch(path, callback(content))`: executes callback first and on every change
   - `async data_save(path, content)`: writes the content to the file in data directory
+
+most file updates are handled automatically, but some updates cannot be detected, for example by git, so you can force a reload of all files by calling `rtjscomp.actions.reload_force()` or sending a `SIGHUP` signal to the process (done by systemctl reload).
 
 ## environment variables
 - `rtjscomp_path_data`: path to data directory, default is `./data`
