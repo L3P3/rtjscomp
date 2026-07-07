@@ -1,0 +1,68 @@
+<?
+
+if (input.action) {
+	if (!rtjscomp.actions.hasOwnProperty(input.action)) {
+		return 404;
+	}
+	setTimeout(async () => {
+		try {
+			await rtjscomp.actions[input.action]();
+		}
+		catch (err) {
+			log(`error while running action '${input.action}': ${err.message || err}`);
+		}
+	}, 100);
+
+	?><!DOCTYPE html>
+<html>
+	<head>
+		<title>Diagnose</title>
+		<meta http-equiv=refresh content="2; URL=diagnose.html">
+	</head>
+	<body>
+		<h1>Executing <?= input.action ?>...</h1>
+	</body>
+</html><?
+	}
+	else {
+		let log_lines = 10;
+		if (input.log) {
+			if(
+				isNaN(log_lines = parseInt(input.log)) ||
+				log_lines < 0
+			) {
+				log_lines = 1;
+			}
+		}
+
+	?><!DOCTYPE html>
+<html>
+	<head>
+		<title>Diagnose</title>
+		<meta name=robots content=noindex>
+	</head>
+	<body>
+		<form>
+			<select name="action"><?
+	for(const action in rtjscomp.actions){
+		?>
+				<option><?= action ?></option><?
+		}
+	?>
+			</select>
+			<input type=submit value=!>
+		</form>
+		<code>
+			<pre><?:
+				(
+					log_lines === 0
+					?	rtjscomp.log_history
+					:	rtjscomp.log_history.slice(-log_lines)
+				)
+				.join('\n')
+			?></pre>
+		</code>
+	</body>
+</html><?
+	}
+?>
