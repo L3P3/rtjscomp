@@ -199,7 +199,7 @@ rtjscomp.escape_html = str => (
 	HTML_ESCAPE_TEST_REG.test(str)
 	?	str.replace(HTML_ESCAPE_REG, escape_html_char)
 	:	str
-);
+)
 
 const file_watch = (path, callback) => {
 	watch_callbacks.add(callback);
@@ -210,7 +210,7 @@ const file_watch = (path, callback) => {
 			watcher.close();
 		},
 	};
-};
+}
 actions.reload_force = () => {
 	log('force file reload');
 	for (const callback of watch_callbacks) callback();
@@ -232,7 +232,7 @@ const linenumber_try = err => {
 	catch (_) {
 		return '';
 	}
-};
+}
 
 const custom_require_paths = new Set;
 const custom_require_cache = new Map;
@@ -523,7 +523,9 @@ const service_update = async service_object => {
 		if (dep.status !== SERVICE_STATUS_ACTIVE) {
 			continue other;
 		}
-		other.promise_deps_resolve();
+		if (other.promise_deps_resolve) {
+			other.promise_deps_resolve();
+		}
 	}
 	services_loaded_promise_try();
 }
