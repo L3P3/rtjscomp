@@ -18,7 +18,7 @@ const COMPRESS_METHOD_NONE = 0;
 const COMPRESS_METHOD_GZIP = 1;
 const COMPRESS_METHOD_BROTLI = 2;
 const COMPRESS_METHOD_ZSTD = 3;
-const COMPRESS_METHODS = ',gzip,brotli,zstd'.split(',');
+const COMPRESS_METHODS = ',gzip,br,zstd'.split(',');
 const GZIP_OPTIONS = {level: 9};
 const HAS_BROTLI = zlib.createBrotliCompress != null;
 const HAS_ZSTD = zlib.createZstdCompress != null;
