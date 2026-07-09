@@ -2,6 +2,7 @@
 config/
 data/
 node_modules/
+public/diagnose.html
 build.js
 externs.js
 changes_before_git.txt
