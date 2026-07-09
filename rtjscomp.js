@@ -1561,7 +1561,7 @@ const request_handle = async (request, response, https) => {
 			if (compression_enabled_type) {
 				response.setHeader('Vary', 'Accept-Encoding');
 			}
-			response.setHeader('Cache-Control', 'public, max-age=31536000');
+			response.setHeader('Cache-Control', 'public, max-age=600, stale-if-error=315360000');
 			response.setHeader('Last-Modified', new Date(file_stat.mtimeMs).toUTCString());
 
 			if (
