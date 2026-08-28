@@ -1448,7 +1448,12 @@ const request_handle = async (request, response, https) => {
 			let returned;
 			let watchdog_counter = 0;
 			const watchdog_interval = setInterval(() => {
-				log(`[warning] ${path}: running over ${++watchdog_counter * 5} seconds`);
+				if (('' + response.getHeader('Content-Type')).startsWith('text/event-stream')) {
+					clearInterval(watchdog_interval);
+				}
+				else {
+					log(`[warning] ${path}: running over ${++watchdog_counter * 5} seconds`);
+				}
 			}, 5e3);
 			try {
 				returned = await file_function(
