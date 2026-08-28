@@ -13,9 +13,7 @@
 		"start": "./rtjscomp.js",
 		"build": "./build.js"
 	},
-	"bin": {
-		"rtjscomp": "./rtjscomp.js"
-	},
+	"bin": "./rtjscomp.js",
 	"keywords": [
 		"http",
 		"javascript",
