@@ -29,6 +29,7 @@ const IMPORT_REG = /\bimport\(/g;
 const IPS_PRIVATE = /^(127\.|10\.|192\.168\.|::1|fc00:|fe80:)/;
 const IS_BUN = typeof Bun !== 'undefined';
 const LINENUMBER_REG = /:([0-9]+)[\):]/;
+const Object_defineProperty = Object.defineProperty;
 const PATH_CONFIG = 'config/';
 const PATH_DATA = (process.env.rtjscomp_path_data || 'data') + '/';
 const PATH_PUBLIC = (process.env.rtjscomp_path_public || 'public') + '/';
@@ -420,18 +421,27 @@ const service_update = async service_object => {
 				}
 			}
 
-			service_object.file_function = new AsyncFunction(
-				'require',
-				'custom_import',
-				'service_require',
-				'service_require_try',
-				`const log=a=>rtjscomp.log(${
-					JSON.stringify(path + ': ')
-				}+a);${
-					file_content
-						.replace(IMPORT_REG, 'custom_import(')
-				}`
-			);
+			Object_defineProperty((
+				service_object.file_function = new AsyncFunction(
+					'require',
+					'custom_import',
+					'service_require',
+					'service_require_try',
+					`const log=a=>rtjscomp.log(${
+						JSON.stringify(path + ': ')
+					}+a);${
+						file_content
+							.replace(IMPORT_REG, 'custom_import(')
+					}\n//# sourceURL=${
+						path_real
+							.split('/')
+							.map(encodeURIComponent)
+							.join('/')
+					}`
+				)
+			), 'name', {
+				value: path,
+			});
 		}
 
 		service_object.dependencies = [];
@@ -839,18 +849,11 @@ const multipart_parse = (body_raw, boundary, result) => {
 				throw 'part too short';
 			}
 			// find end of header
-			let index_header_end = index_start;
-			while (
-				(
-					index_header_end = body_raw.indexOf(13, index_header_end) // \r
-				) >= 0 &&
-				body_raw[index_header_end + 1] !== 10 || // \n
-				body_raw[index_header_end + 2] !== 13 || // \r
-				body_raw[index_header_end + 3] !== 10 // \n
+			const index_header_end = body_raw.indexOf('\r\n\r\n', index_start);
+			if (
+				index_header_end < 0 ||
+				index_header_end + 4 > index_end - 2
 			) {
-				++index_header_end;
-			}
-			if (index_header_end < 0) {
 				throw 'part header end not found';
 			}
 			// parse header
@@ -1250,17 +1253,26 @@ const request_handle = async (request, response, https) => {
 					}
 
 					try {
-						file_function = new AsyncFunction(
-							'input',
-							'output',
-							'request',
-							'response',
-							'require',
-							'custom_import',
-							'service_require',
-							'service_require_try',
-							code
-						);
+						Object_defineProperty((
+							file_function = new AsyncFunction(
+								'input',
+								'output',
+								'request',
+								'response',
+								'require',
+								'custom_import',
+								'service_require',
+								'service_require_try',
+								code + '\n//# sourceURL=' + (
+									path_real
+										.split('/')
+										.map(encodeURIComponent)
+										.join('/')
+								)
+							)
+						), 'name', {
+							value: path,
+						});
 					}
 					catch (err) {
 						throw err.message;
@@ -1747,7 +1759,10 @@ await file_keep_new(PATH_CONFIG + 'init.js', async data => {
 	log('[deprecated] run global init script');
 	try {
 		await (
-			new AsyncFunction('require', data)
+			new AsyncFunction(
+				'require',
+				`${data}\n//# sourceURL=${PATH_CONFIG}init.js`
+			)
 		)(custom_require);
 	}
 	catch (err) {
